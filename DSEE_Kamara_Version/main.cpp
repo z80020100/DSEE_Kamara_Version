@@ -207,11 +207,6 @@ class DSSE
 		
 		void enc()
 		{
-			struct search_array As[8];
-			struct del_array Ad[8];
-			struct search_table Ts[4];
-			struct del_table Td[3];
-			
 			int array_index;
 			
 			array_index = 0;
@@ -440,11 +435,38 @@ class DSSE
 			cout << "Free index build complete" << endl;
 		}
 
-	
+		void search(string keyword)
+		{
+			int keyword_hash = F(keyword);
+			struct search_array *temp_As;
+			
+			temp_As = Ts[keyword_hash].addr_s_N_first;
+			cout << "Find keyword: " << keyword << " in ";
+			while (1)
+			{
+				cout << temp_As->id <<", ";
+				if (temp_As->addr_s_next != 0)
+				{
+					temp_As = temp_As->addr_s_next;
+				}
+				else
+				{
+					break;
+				}
+			}
+			cout << endl;
+		}
+
 	private:
 		byte k1[16], k2[16], k3[16], k4[16];
+		
 		struct index_keyword keyword_set[3];
 		struct index_file file_set[3];
+
+		struct search_array As[8];
+		struct del_array Ad[8];
+		struct search_table Ts[4];
+		struct del_table Td[3];
 
 };
 
@@ -454,6 +476,9 @@ int main()
 	DSSE_obj.keygen();
 	DSSE_obj.index_build();
 	DSSE_obj.enc();
+	DSSE_obj.search("w1");
+	DSSE_obj.search("w2");
+	DSSE_obj.search("w3");
 
 	return 0;
 }
