@@ -1,17 +1,33 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
+#include <random>
 
 #include <sha.h>
 #include <osrng.h>
 #include <hex.h>
 #include <hmac.h>
+#include <cmac.h>
 
 #pragma comment(lib, "cryptlib.lib")
+
+#define ARRAY_SIZE 6
+#define FREE_SIZE 2
+#define SEARCH_TABLE_SIZE 65536
+#define DELETE_TABLE_SIZE 65536
+#define FREE "\"free\""
 
 using namespace std;
 using namespace CryptoPP;
 
+inline void string_to_byte(byte *b_text, string s_text, int b_text_len);  // parse a string raw data to an array
+
+/*string sha256(string text)
+{
+	return text;
+}*/
 string sha256(string text)
 {
 	SHA256 hash;
@@ -82,62 +98,98 @@ string HMAC_SHA_256(byte *user_key, int user_key_len, string plain)
 	return mac;
 }
 
-int F(string keyword) // simple keyword hash function
+string CMAC_AES_128(byte *user_key, int user_key_len, string plain) // user_key_len must be equal to AES::DEFAULT_KEYLENGTH
 {
-	if (keyword == "w1" || keyword == "f1")
+	//byte user_key[16] = {0x00};
+	SecByteBlock key(user_key, user_key_len);
+
+	//string plain = "CMAC Test";
+	string mac, encoded;
+
+	// Pretty print key
+	encoded.clear();
+	StringSource ss1(key, key.size(), true,
+		new HexEncoder(
+		new StringSink(encoded)
+		) // HexEncoder
+		); // StringSource
+
+	cout << "key: " << encoded << endl;
+	cout << "plain text: " << plain << endl;
+
+	try
 	{
-		return 0;
+		CMAC< AES > cmac(key.data(), key.size());
+
+		StringSource ss2(plain, true,
+			new HashFilter(cmac,
+			new StringSink(mac)
+			) // HashFilter      
+			); // StringSource
 	}
-	else if (keyword == "w2" || keyword == "f2")
+	catch (const CryptoPP::Exception& e)
 	{
-		return 1;
-	}
-	else if (keyword == "w3" || keyword == "f3")
-	{
-		return 2;
-	}
-	else if (keyword == "free")
-	{
-		return 3;
-	}
-	else
-	{
-		cout << "Error: keyword is not exist" << endl;
+		cerr << e.what() << endl;
 		exit(1);
 	}
+
+	// Pretty print
+	encoded.clear();
+	StringSource ss3(mac, true,
+		new HexEncoder(
+		new StringSink(encoded)
+		) // HexEncoder
+		); // StringSource
+
+	cout << "cmac: " << encoded << endl;
+
+	return mac;
+}
+
+int F(byte *user_key, int user_key_len, string keyword, int unit_bytes, int index) // hash function
+{
+	string cmac = CMAC_AES_128(user_key, user_key_len, keyword);
+	byte temp[16];
+	string_to_byte(temp, cmac, 16);
+	unsigned short int *ptr_2byte;
+	if (unit_bytes == 2)
+	{
+		ptr_2byte = (unsigned short int*)temp;
+	}
+	return ptr_2byte[index];
 }
 
 struct search_array //As, for each keyword
 {
-	string id; // the ID of the file
-	struct search_array *addr_s_next; // the address of the next node in search array for a keyword
-	byte r[16];
-	struct del_array *free_Ad;
+	char id[32]; // the ID of the file, use sha256(file_name) as ID
+	int addr_s_next; // the address of the next node in search array for a keyword
+	int r; // for free As node, this is pointer to free Ad node
 };
 
 struct search_table // Ts, for each keyword
 {
-	struct search_array *addr_s_N_first; // the address of the first node in search array for a keyword
-	struct search_array **addr_d_N_first_dual; // the address of the first node in deletion array whose fourth entry points to the first node in search array for a keyword
+	int addr_s_N_first; // the address of the first node in search array for a keyword
+	int addr_d_N_first_dual; // the address of the first node in deletion array whose fourth entry points to the first node in search array for a keyword
 };
 
 struct del_array // Ad, for each file
 {
-	struct del_array *addr_d_next; // the address of the next node in deletion array for a file f
-	struct search_array **addr_d_prev_file; // the address of the fourth entry in deletion array which is points to the node for the next file f_+1 and keyword w
-	struct search_array **addr_d_next_file; // the address of the fourth entry in deletion array which is points to the node for the previous file f_+1 and keyword w
-	struct search_array *addr_s_file; // the address of the node in search array which is for keyword w that contain file f
-	struct search_array *addr_s_prev_file; // the address of the node in search array which is for keyword w that contain previous file f_-1
-	struct search_array *addr_s_next_file; // the address of the node in search array which is for keyword w that contain next file f_+1
+	int addr_d_next; // the address of the next node in deletion array for a file f
+	int addr_d_prev_file; // the address of the fourth entry in deletion array which is points to the node for the next file f_+1 and keyword w
+	int addr_d_next_file; // the address of the fourth entry in deletion array which is points to the node for the previous file f_+1 and keyword w
+	int addr_s_file; // the address of the node in search array which is for keyword w that contain file f
+	int addr_s_prev_file; // the address of the node in search array which is for keyword w that contain previous file f_-1
+	int addr_s_next_file; // the address of the node in search array which is for keyword w that contain next file f_+1
 	int keyword_hash;
-	byte r_p[16]; // r'
+	int r_p; // r'
 };
 
 struct del_table // Td, for each file
 {
-	struct del_array *addr_d_D_first;
+	int addr_d_D_first;
 };
 
+/* auxiliary structure */
 struct index_keyword // the index of a keyword and files id
 {
 	string keyword;
@@ -151,13 +203,49 @@ struct index_file // the index of a file and keywords
 	string keyqord[3];
 	int number; // numbers of keyword for a file f
 };
+/* auxiliary structure */
 
+/* auxiliary function */
+inline void string_to_byte(byte *b_text, string s_text, int b_text_len)
+{
+	memcpy((char*)b_text, s_text.c_str(), b_text_len);
+}
 
+void random_location(int *location_ptr, int range, int number) // 產生一個大小為number的隨機數列，範圍從0到range-1，數字不會重複
+{
+	if (number > range)
+	{
+		cout << "Error: number cannot greater than range" << endl;
+		return;
+	}
+
+	int *used = new int[number];
+	memset(used, 0, number*sizeof(int));
+
+	int counter = 0;
+	while (1)
+	{
+		int temp = rand() % range;
+
+		if (used[temp] == 0)
+		{
+			cout << temp << endl;
+			used[temp] = 1;
+			location_ptr[counter] = temp;
+			counter++;
+		}
+		
+		if (counter == number)
+			break;
+	}
+	delete[] used;
+}
+/* auxiliary function */
 
 class DSSE
 {
 	public:
-		void keygen()
+		void client_keygen()
 		{
 			memset(k1, 0x00, sizeof(k1));
 			memset(k2, 0x01, sizeof(k2));
@@ -165,7 +253,7 @@ class DSSE
 			memset(k4, 0x03, sizeof(k4));
 		}
 
-		void index_build()
+		void client_index_build()
 		{
 			/* build index for keyword */
 			keyword_set[0].keyword = "w1";
@@ -205,280 +293,334 @@ class DSSE
 			/* build index for file */
 		}
 		
-		void enc()
+		void client_enc()
 		{
-			int array_index;
-			
-			array_index = 0;
-			for (int i = 0; i < 3; i++) // for keyword, w1, w2, w3
-			{
-				Ts[F(keyword_set[i].keyword)].addr_s_N_first = As + array_index; // build first element of Ts
+			/* For 32-bit random number r and r_p */
+			random_device rd;
+			default_random_engine eng{ rd() };
+			uniform_int_distribution<> dist;
+			/* For 32-bit random number r and r_p */
 
+			/* Initialization */
+			memset(As, -1, sizeof(As));
+			memset(Ad, -1, sizeof(Ad));
+			memset(Ts, -1, sizeof(Ts));
+			memset(Td, -1, sizeof(Td));
+			/* Initialization */
+
+			int keyeord_number = 3;
+			int file_number = 3;
+
+			int node_number = 0;
+			for (int i = 0; i < keyeord_number; i++)
+			{
+				node_number = node_number + keyword_set[i].number;
+			}
+
+			string file_id_string; // to store sha256(file_name) temporarily
+
+			/* Generate a sequence to store node N at random location in As */
+			int *As_index = new int[ARRAY_SIZE + FREE_SIZE];
+			random_location(As_index, ARRAY_SIZE + FREE_SIZE, ARRAY_SIZE + FREE_SIZE);
+			/* Generate a sequence to store node N at random location in As */
+			
+			/* Build As */
+			int counter = 0;
+			for (int i = 0; i < keyeord_number; i++) // for keyword, w1, w2, w3
+			{
+				Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)].addr_s_N_first = As_index[counter]; // build first element of Ts
+				cout << "DEBUG: F(" << keyword_set[i].keyword << ") = " << F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0) << endl;
 				for (int j = 0; j < keyword_set[i].number; j++) // for file include the keyword
 				{
-					As[array_index].id = keyword_set[i].id[j];
+					string_to_byte((byte*)As[As_index[counter]].id, sha256(keyword_set[i].id[j]), 32); // store ID to As
+					//As[As_index[counter]].id = keyword_set[i].id[j];
+					As[As_index[counter]].r = dist(eng); // generate r
 
-					if (j == keyword_set[i].number - 1)
+					if (j == keyword_set[i].number - 1) // the last node for a keyword
 					{
-						As[array_index].addr_s_next = NULL;
+						As[As_index[counter]].addr_s_next = -1; // let array_index < 0 as NULL
 					}
 					else
 					{
-						As[array_index].addr_s_next = As + array_index + 1;
+						As[As_index[counter]].addr_s_next = As_index[counter + 1];
 					}
-					array_index++;
+					counter++;
 				}
 			}
+			cout << endl;
+			/* Build As */
+
+			/* Generate a sequence to store node N at random location in Ad */
+			int *Ad_index = new int[ARRAY_SIZE + FREE_SIZE];
+			random_location(Ad_index, ARRAY_SIZE + FREE_SIZE, ARRAY_SIZE + FREE_SIZE);
+			/* Generate a sequence to store node N at random location in Ad */
 			
-			array_index = 0;
 			int keyword_hash;
-			struct search_array *temp_As;
-			for (int i = 0; i < 3; i++) // for file id, f1, f2, f3 
+			int file_hash;
+			int temp_As_index;
+			int temp_Ad_index;
+			int temp_Ad_index2;
+
+			counter = 0;
+			for (int i = 0; i < file_number; i++) // for file id, f1, f2, f3
 			{
-				Td[F(file_set[i].id)].addr_d_D_first = Ad + array_index;
+				file_hash = F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0);
+				cout << "DEBUG: F(" << file_set[i].id << ") = " << file_hash << endl;
+				Td[file_hash].addr_d_D_first = Ad_index[counter];
+				
 				for (int j = 0; j < file_set[i].number; j++) // for keyword in each file
 				{
-					keyword_hash = F(file_set[i].keyqord[j]);
+					keyword_hash = F(k1, sizeof(k1), file_set[i].keyqord[j], 2, 0);
+					Ad[Ad_index[counter]].r_p = dist(eng);
 
 					/* Addr_d(D_i+1) */
-					if (j == file_set[i].number - 1)
+					if (j == file_set[i].number - 1) // the last node for a file
 					{
-						Ad[array_index].addr_d_next = NULL;
+						Ad[Ad_index[counter]].addr_d_next = -1;
 					}
 					else
 					{
-						Ad[array_index].addr_d_next = Ad + array_index + 1;
+						Ad[Ad_index[counter]].addr_d_next = Ad_index[counter + 1];
 					}
 					/* Addr_d(D_i+1) */
 
 					/* F(w) */
-					Ad[array_index].keyword_hash = keyword_hash;
+					Ad[Ad_index[counter]].keyword_hash = keyword_hash;
 					/* F(w) */
 
 					/* addr_s(N) */
-					temp_As = Ts[keyword_hash].addr_s_N_first;
+					temp_As_index = Ts[keyword_hash].addr_s_N_first;
 					while (1)
 					{
-						if (temp_As->id == file_set[i].id)
+						file_id_string = sha256(file_set[i].id);
+						if (strncmp(As[temp_As_index].id, file_id_string.c_str(), 32) == 0)
+						//if (As[temp_As_index].id == file_set[i].id)
 						{
-							Ad[array_index].addr_s_file = temp_As;
+							Ad[Ad_index[counter]].addr_s_file = temp_As_index;
 							break;
 						}
 						else
 						{
-							temp_As = temp_As->addr_s_next;
+							temp_As_index = As[temp_As_index].addr_s_next;
 						}
 					}
 					/* addr_s(N) */
 
 					/* addr_s(N+1) */
-					Ad[array_index].addr_s_next_file = Ad[array_index].addr_s_file->addr_s_next;
+					Ad[Ad_index[counter]].addr_s_next_file = As[Ad[Ad_index[counter]].addr_s_file].addr_s_next;
 					/* addr_s(N+1) */
 
 					/* addr_s(N-1) */
-					if (Ts[keyword_hash].addr_s_N_first->id == file_set[i].id)
+					if (strncmp(As[Ts[keyword_hash].addr_s_N_first].id, file_id_string.c_str(), 32) == 0) // if we can find it Ts, there is no previous node
+					//if (As[Ts[keyword_hash].addr_s_N_first].id == file_set[i].id)
 					{
-						Ad[array_index].addr_s_prev_file = NULL;
+						Ad[Ad_index[counter]].addr_s_prev_file = -1;
 					}
 					else
 					{
 						if (i - 1 >= 0)
 						{
-							temp_As = Ts[keyword_hash].addr_s_N_first;
+							temp_As_index = Ts[keyword_hash].addr_s_N_first;
 							while (1)
 							{
-								if (temp_As->id == file_set[i - 1].id)
+								file_id_string = sha256(file_set[i - 1].id);
+								if (strncmp(As[temp_As_index].id, file_id_string.c_str(), 32) == 0)
+								//if (As[temp_As_index].id == file_set[i - 1].id)
 								{
-									Ad[array_index].addr_s_prev_file = temp_As;
+									Ad[Ad_index[counter]].addr_s_prev_file = temp_As_index;
 									break;
 								}
 								else
 								{
-									temp_As = temp_As->addr_s_next;
+									temp_As_index = As[temp_As_index].addr_s_next;
 								}
 							}
 						}
 						else
 						{
-							Ad[array_index].addr_s_prev_file = NULL;
+							Ad[Ad_index[counter]].addr_s_prev_file = -1;
 						}
 					}
 					/* addr_s(N-1) */
-					array_index++;
+					counter++;
 				}
 			}
-
-			struct del_array *temp_Ad;
+			cout << endl;			
 
 			/* build second element of Ts */
-			for (int i = 0; i < 3; i++)
-			{
-				temp_As = Ts[F(keyword_set[i].keyword)].addr_s_N_first;
-				temp_Ad = Td[F(temp_As->id)].addr_d_D_first;
-				while (1)
-				{
-					if (temp_Ad->addr_s_file == temp_As)
-					{
-						Ts[F(keyword_set[i].keyword)].addr_d_N_first_dual = &(temp_Ad->addr_s_file);
-						break;
-					}
-					else
-					{
-						temp_Ad = temp_Ad->addr_d_next;
-					}
-				}
-			}
-			/* build second element of Ts */
-
-			/* build addr_d(N+1) */
-			struct del_array *temp_Ad2;
-			for (int i = 0; i < 3; i++)
-			{
-				temp_Ad = Td[F(file_set[i].id)].addr_d_D_first;
-				while (1)
-				{
-					if (temp_Ad->addr_s_next_file != NULL)
-					{
-						temp_As = temp_Ad->addr_s_next_file;
-						temp_Ad2 = Td[F(temp_As->id)].addr_d_D_first;
-						while (1)
-						{
-							if (temp_Ad2->addr_s_file == temp_Ad->addr_s_next_file)
-							{
-								temp_Ad->addr_d_next_file = &(temp_Ad2->addr_s_file);
-								break;
-							}
-							else
-							{
-								temp_Ad2 = temp_Ad2->addr_d_next;
-							}
-						}
-					}
-					else
-					{
-						temp_Ad->addr_d_next_file = NULL;
-					}
-					if (temp_Ad->addr_d_next == NULL)
-					{
-						break;
-					}
-					else
-					{
-						temp_Ad = temp_Ad->addr_d_next;
-					}
-				}
-
-			}
-			/* build addr_d(N+1) */
-
-			/* build addr_d(N-1) */
-			for (int i = 0; i < 3; i++)
-			{
-				temp_Ad = Td[F(file_set[i].id)].addr_d_D_first;
-				while (1)
-				{
-					if (temp_Ad->addr_s_prev_file != 0)
-					{
-						temp_As = temp_Ad->addr_s_prev_file;
-						temp_Ad2 = Td[F(temp_As->id)].addr_d_D_first;
-						while (1)
-						{
-							if (temp_Ad2->addr_s_file == temp_Ad->addr_s_prev_file)
-							{
-								temp_Ad->addr_d_prev_file = &(temp_Ad2->addr_s_file);
-								break;
-							}
-							else
-							{
-								temp_Ad2 = temp_Ad2->addr_d_next;
-							}
-						}
-
-					}
-					else
-					{
-						temp_Ad->addr_d_prev_file = NULL;
-					}
-					if (temp_Ad->addr_d_next == NULL)
-					{
-						break;
-					}
-					else
-					{
-						temp_Ad = temp_Ad->addr_d_next;
-					}
-				}
-			}
-			/* build addr_d(N-1) */
-
-			cout << "Search index build complete" << endl;
-
-			for (int i = 6; i < 8; i++)
-			{
-				As[i].id = '0';
-				if (i == 7)
-				{
-					As[i].addr_s_next = NULL;
-				}
-				else
-				{
-					As[i].addr_s_next = As + i + 1;
-				}				
-				As[i].free_Ad = Ad + i;
-
-				memset(Ad + i, NULL, sizeof(del_array));
-			}
-
-			Ts[F("free")].addr_s_N_first = &(As[6]);
-			Ts[F("free")].addr_d_N_first_dual = NULL;
-
-			cout << "Free index build complete" << endl;
-		}
-
-		void search(string keyword)
-		{
-			int keyword_hash = F(keyword);
-			struct search_array *temp_As;
 			
-			temp_As = Ts[keyword_hash].addr_s_N_first;
-			cout << "Find keyword: " << keyword << " in ";
-			while (1)
+			for (int i = 0; i < keyeord_number; i++) // for each keyword
 			{
-				cout << temp_As->id <<", ";
-				if (temp_As->addr_s_next != 0)
+				keyword_hash = F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0);
+				temp_As_index = Ts[keyword_hash].addr_s_N_first;
+				file_id_string.clear();
+				file_id_string.assign(As[temp_As_index].id, 32);
+				temp_Ad_index = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
+				while (1)
 				{
-					temp_As = temp_As->addr_s_next;
-				}
-				else
-				{
-					break;
+					if (Ad[temp_Ad_index].addr_s_file == temp_As_index)
+					{
+						Ts[keyword_hash].addr_d_N_first_dual = temp_Ad_index;
+						break;
+					}
+					else
+					{
+						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+					}
 				}
 			}
-			cout << endl;
-		}
+			/* build second element of Ts */
 
+			/* build addr_d(N+1) */
+			for (int i = 0; i < file_number; i++)
+			{
+				file_id_string = sha256(file_set[i].id);
+				file_hash = F(k1, sizeof(k1), file_id_string, 2, 0);
+				temp_Ad_index = Td[file_hash].addr_d_D_first;
+				while (1)
+				{
+					if (Ad[temp_Ad_index].addr_s_next_file != -1)
+					{
+						temp_As_index = Ad[temp_Ad_index].addr_s_next_file;
+						file_id_string.clear();
+						file_id_string.assign(As[temp_As_index].id, 32);
+						temp_Ad_index2 = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
+						while (1)
+						{
+							if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_next_file)
+							{
+								Ad[temp_Ad_index].addr_d_next_file = temp_Ad_index2;
+								break;
+							}
+							else
+							{
+								temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
+							}
+						}
+					}
+					else
+					{
+						Ad[temp_Ad_index].addr_d_next_file = -1;
+					}
+
+					if (Ad[temp_Ad_index].addr_d_next == -1)
+					{
+						break;
+					}
+					else
+					{
+						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+					}
+				}
+			}
+			/* build addr_d(N+1) */
+			cout << endl;
+
+			/* build addr_d(N-1) */
+			for (int i = 0; i < file_number; i++)
+			{
+				file_id_string = sha256(file_set[i].id);
+				file_hash = F(k1, sizeof(k1), file_id_string, 2, 0);
+				temp_Ad_index = Td[file_hash].addr_d_D_first;
+				while (1)
+				{
+					if (Ad[temp_Ad_index].addr_s_prev_file != -1)
+					{
+						temp_As_index = Ad[temp_Ad_index].addr_s_prev_file;
+						file_id_string.clear();
+						file_id_string.assign(As[temp_As_index].id, 32);
+						temp_Ad_index2 = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
+						while (1)
+						{
+							if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_prev_file)
+							{
+								Ad[temp_Ad_index].addr_d_prev_file = temp_Ad_index2;
+								break;
+							}
+							else
+							{
+								temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
+							}
+						}
+					}
+					else
+					{
+						Ad[temp_Ad_index].addr_d_prev_file = -1;
+					}
+
+					if (Ad[temp_Ad_index].addr_d_next == -1)
+					{
+						break;
+					}
+					else
+					{
+						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+					}
+				}
+			}
+			/* build addr_d(N-1) */
+			cout << "Search index build complete" << endl;
+			
+			/* For free As */
+			cout << "DEBUG: F(" << FREE << ") = " << F(k1, sizeof(k1), FREE, 2, 0) << endl;
+			Ts[F(k1, sizeof(k1), FREE, 2, 0)].addr_s_N_first = As_index[ARRAY_SIZE + FREE_SIZE - 1];
+			for (int i = ARRAY_SIZE + FREE_SIZE - 1; i >= ARRAY_SIZE; i--)
+			{
+				memset(As[As_index[i]].id, -1, 32);
+				//As[As_index[i]].id = "-1";
+				
+				if (i == ARRAY_SIZE)
+					As[As_index[i]].addr_s_next = -1;
+				else
+					As[As_index[i]].addr_s_next = As_index[i - 1];
+					
+				As[As_index[i]].r = Ad_index[i];
+			}
+			/* For free As */
+			cout << "Free index build complete" << endl;
+
+			delete[] As_index;
+			delete[] Ad_index;
+		}
+			
 	private:
 		byte k1[16], k2[16], k3[16], k4[16];
 		
 		struct index_keyword keyword_set[3];
 		struct index_file file_set[3];
 
-		struct search_array As[8];
-		struct del_array Ad[8];
-		struct search_table Ts[4];
-		struct del_table Td[3];
+		struct search_array As[ARRAY_SIZE + FREE_SIZE];
+		struct del_array Ad[ARRAY_SIZE + FREE_SIZE];
+		struct search_table Ts[SEARCH_TABLE_SIZE];
+		struct del_table Td[DELETE_TABLE_SIZE];
+
+		
 
 };
 
 int main()
 {
+	
 	DSSE DSSE_obj;
-	DSSE_obj.keygen();
-	DSSE_obj.index_build();
-	DSSE_obj.enc();
-	DSSE_obj.search("w1");
-	DSSE_obj.search("w2");
-	DSSE_obj.search("w3");
+
+	DSSE_obj.client_keygen();
+	DSSE_obj.client_index_build();
+	DSSE_obj.client_enc();
+	//DSSE_obj.search("w1");
+	//DSSE_obj.search("w2");
+	//DSSE_obj.search("w3");
+
+
+	//DSSE_obj.add();
+	//DSSE_obj.search("w1");
+
+	/*byte key[16] = { 0 };
+	cout << F(key, 16, "f1", 2, 0) << endl;
+	cout << F(key, 16, "f2", 2, 0) << endl;
+	cout << F(key, 16, "f3", 2, 0) << endl;
+	cout << F(key, 16, "w1", 2, 0) << endl;
+	cout << F(key, 16, "w2", 2, 0) << endl;
+	cout << F(key, 16, "w3", 2, 0) << endl;*/
 
 	return 0;
 }
