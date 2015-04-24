@@ -13,7 +13,7 @@
 
 #pragma comment(lib, "cryptlib.lib")
 
-#define ARRAY_SIZE 6
+#define ARRAY_SIZE 7
 #define FREE_SIZE 2
 #define SEARCH_TABLE_SIZE 65536
 #define DELETE_TABLE_SIZE 65536
@@ -578,6 +578,27 @@ class DSSE
 			}
 			/* For free As */
 			cout << "Free index build complete" << endl;
+
+			/* Write random string to remaining As and Ad */
+			for (int i = counter; i < ARRAY_SIZE; i++)
+			{
+				As[As_index[counter]].addr_s_next = dist(eng);
+				As[As_index[counter]].r = dist(eng);
+				for (int j = 0; j < 8; j++)
+				{
+					*((int*)As[As_index[counter]].id + j) = dist(eng); // write 32 bytes random string to As.id[]
+				}
+				Ad[Ad_index[counter]].addr_d_next = dist(eng);
+				Ad[Ad_index[counter]].addr_d_next_file = dist(eng);
+				Ad[Ad_index[counter]].addr_d_prev_file = dist(eng);
+				Ad[Ad_index[counter]].addr_s_file = dist(eng);
+				Ad[Ad_index[counter]].addr_s_next_file = dist(eng);
+				Ad[Ad_index[counter]].addr_s_prev_file = dist(eng);
+				Ad[Ad_index[counter]].keyword_hash = dist(eng);
+				Ad[Ad_index[counter]].r_p = dist(eng);
+			}
+			cout << "Random data write complete" << endl;
+			/* Write random string to remaining As and Ad */
 
 			delete[] As_index;
 			delete[] Ad_index;
