@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <random>
+#include <dirent.h>
+#include <fstream>
 
 #include <sha.h>
 #include <osrng.h>
@@ -159,20 +161,20 @@ int F(byte *user_key, int user_key_len, string keyword, int unit_bytes, int inde
 	return ptr_2byte[index];
 }
 
-struct search_array //As, for each keyword
+struct search_array //As, for each keyword, 40 bytes
 {
 	char id[32]; // the ID of the file, use sha256(file_name) as ID
 	int addr_s_next; // the address of the next node in search array for a keyword
 	int r; // for free As node, this is pointer to free Ad node
 };
 
-struct search_table // Ts, for each keyword
+struct search_table // Ts, for each keyword, 8 bytes
 {
 	int addr_s_N_first; // the address of the first node in search array for a keyword
 	int addr_d_N_first_dual; // the address of the first node in deletion array whose fourth entry points to the first node in search array for a keyword
 };
 
-struct del_array // Ad, for each file
+struct del_array // Ad, for each file, 32 bytes
 {
 	int addr_d_next; // the address of the next node in deletion array for a file f
 	int addr_d_prev_file; // the address of the fourth entry in deletion array which is points to the node for the next file f_+1 and keyword w
@@ -184,7 +186,7 @@ struct del_array // Ad, for each file
 	int r_p; // r'
 };
 
-struct del_table // Td, for each file
+struct del_table // Td, for each file, 4 bytes
 {
 	int addr_d_D_first;
 };
@@ -193,8 +195,18 @@ struct del_table // Td, for each file
 struct index_keyword // the index of a keyword and files id
 {
 	string keyword;
-	string id[3];
+	string *id;
 	int number; // numbers of file for a keyword w
+
+	void build_id()
+	{
+		id = new string[this->number];
+	}
+
+	void del_id()
+	{
+		delete[] id;
+	}
 };
 
 struct index_file // the index of a file and keywords
@@ -255,7 +267,7 @@ class DSSE
 
 		void client_index_build()
 		{
-			/* build index for keyword */
+			/* build index for keyword 
 			keyword_set[0].keyword = "w1";
 			keyword_set[1].keyword = "w2";
 			keyword_set[2].keyword = "w3";
@@ -271,7 +283,94 @@ class DSSE
 			keyword_set[2].id[0] = "f2";
 			keyword_set[2].id[1] = "f3";
 			keyword_set[2].number = 2;
-			/* build index for keyword */
+			 build index for keyword */
+
+			/* build index for keyword  */
+			DIR *dp;
+			fstream file_obj;
+
+			dp = opendir("./Index");
+			struct dirent *ep;
+
+			string path;
+			if (dp != NULL)
+			{
+				int keyword_number = 0, file_number = 0, start, end;
+				int length;
+				char *buf = NULL;
+
+				while (ep = readdir(dp)) // read the index file, the index file need to be UNIX format
+				{
+					//printf("%s\n", ep->d_name);
+					keyword_number++;
+				}
+				keyword_number = keyword_number - 2; // 扣掉當前目錄和上層目錄
+				cout << "We have " << keyword_number << " keywords" << endl;
+				keyword_set = new struct index_keyword[keyword_number];
+				rewinddir(dp);
+				readdir(dp);
+				readdir(dp);
+
+				int counter = 0;
+				while (ep = readdir(dp))
+				{
+					file_number = 0;
+					printf("%s\n", ep->d_name);
+					keyword_set[counter].keyword = ep->d_name; // write keyword to keyword_set
+					path.clear();
+					path = "./Index/" + path.assign(ep->d_name);
+					file_obj.open(path, ios::in | ios::binary);
+
+					if (!file_obj)
+					{
+						cerr << "Index file: " << ep->d_name << " open failed..." << endl << endl;
+						continue;
+					}
+
+					/* Calculate file size (bytes) */
+					file_obj.seekg(0, ios::end);
+					length = file_obj.tellg(); // the size of the file
+					file_obj.seekg(0, ios::beg);
+					cout << "Index file: " << ep->d_name << " is " << length << " bytes." << endl;
+					/* Calculate file size (bytes) */
+
+					buf = new char[length];
+					file_obj.read(buf, length);
+
+					/* Counte the number of file */
+					for (int i = 0; i < length; i++)
+					{
+						if (buf[i] == '\n')
+						{
+							file_number++;
+						}
+					}
+					cout << "File number: " << file_number << endl;
+					/* Counte the number of file */
+
+					keyword_set[counter].number = file_number; // write numbers of file include a keyword
+					keyword_set[counter].build_id(); // generate a space to store id
+
+					start = 0;
+					file_number = 0;
+					for (int i = 0; i < length; i++)
+					{
+						if (buf[i] == '\n')
+						{
+							end = i;
+							//cout << "DEBUG: start = " << start << endl;
+							//cout << "DEBUG: end = " << end << endl;
+							keyword_set[counter].id[file_number].assign(&buf[start], end - start); // write file id
+							start = end + 1;
+							file_number++;
+						}
+					}
+					file_obj.close();
+					delete[] buf;
+					counter++;
+				}
+			}
+			/* build index for keyword  */
 
 
 			/* build index for file */
@@ -588,6 +687,7 @@ class DSSE
 				{
 					*((int*)As[As_index[counter]].id + j) = dist(eng); // write 32 bytes random string to As.id[]
 				}
+
 				Ad[Ad_index[counter]].addr_d_next = dist(eng);
 				Ad[Ad_index[counter]].addr_d_next_file = dist(eng);
 				Ad[Ad_index[counter]].addr_d_prev_file = dist(eng);
@@ -599,6 +699,72 @@ class DSSE
 			}
 			cout << "Random data write complete" << endl;
 			/* Write random string to remaining As and Ad */
+			
+			/* Encryption As */
+			char *temp_ptr;
+			string Kw, H1;
+			for (int i = 0; i < keyeord_number; i++)
+			{
+				Kw = CMAC_AES_128(k3, sizeof(k3), keyword_set[i].keyword); // fora keyword, generate a key for HMAC_SHA_256
+				temp_As_index = Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)].addr_s_N_first;
+				while (temp_As_index != -1)
+				{
+					H1 = HMAC_SHA_256((byte*)Kw.c_str(), sizeof(Kw), to_string(As[temp_As_index].r)); // generate a 256-bit key
+					H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
+					temp_ptr = (char*)&As[temp_As_index];
+					temp_As_index = As[temp_As_index].addr_s_next;
+					for (int j = 0; j < 36; j++)
+					{
+						temp_ptr[j] = temp_ptr[j] ^ H1.c_str()[j];
+					}
+				}
+			}
+			/* Encryption As */
+
+			/* Encryption Ad */
+			string Kf, H2;
+			for (int i = 0; i < file_number; i++)
+			{
+				Kf = CMAC_AES_128(k3, sizeof(k3), sha256(file_set[i].id));
+				temp_Ad_index = Td[F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0)].addr_d_D_first;
+				while (temp_Ad_index != -1)
+				{
+					H2 = HMAC_SHA_256((byte*)Kf.c_str(), sizeof(Kf), to_string(Ad[temp_Ad_index].r_p));
+					temp_ptr = (char*)&Ad[temp_Ad_index];
+					temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+					for (int j = 0; j < 28; j++)
+					{
+						temp_ptr[j] = temp_ptr[j] ^ H2.c_str()[j];
+					}
+				}
+			}
+			/* Encryption Ad */
+
+			/* Encryption  Ts */
+			string G_k2_w;
+			for (int i = 0; i < keyeord_number; i++) // for each keyword
+			{
+				G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword_set[i].keyword);
+				temp_ptr = (char*)&Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)];
+				for (int j = 0; j < sizeof(struct search_table); j++)
+				{
+					temp_ptr[j] = temp_ptr[j] ^ G_k2_w.c_str()[j];
+				}
+			}
+			/* Encryption  Ts */
+
+			/* Encryption Td */
+			string G_k2_f;
+			for (int i = 0; i < file_number; i++) // for each keyword
+			{
+				G_k2_f = CMAC_AES_128(k2, sizeof(k2), sha256(file_set[i].id));
+				temp_ptr = (char*)&Td[F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0)];
+				for (int j = 0; j < sizeof(struct del_table); j++)
+				{
+					temp_ptr[j] = temp_ptr[j] ^ G_k2_f.c_str()[j];
+				}
+			}
+			/* Encryption Td */
 
 			delete[] As_index;
 			delete[] Ad_index;
@@ -607,16 +773,13 @@ class DSSE
 	private:
 		byte k1[16], k2[16], k3[16], k4[16];
 		
-		struct index_keyword keyword_set[3];
+		struct index_keyword *keyword_set;
 		struct index_file file_set[3];
 
 		struct search_array As[ARRAY_SIZE + FREE_SIZE];
 		struct del_array Ad[ARRAY_SIZE + FREE_SIZE];
 		struct search_table Ts[SEARCH_TABLE_SIZE];
 		struct del_table Td[DELETE_TABLE_SIZE];
-
-		
-
 };
 
 int main()
@@ -634,14 +797,9 @@ int main()
 
 	//DSSE_obj.add();
 	//DSSE_obj.search("w1");
+	
 
-	/*byte key[16] = { 0 };
-	cout << F(key, 16, "f1", 2, 0) << endl;
-	cout << F(key, 16, "f2", 2, 0) << endl;
-	cout << F(key, 16, "f3", 2, 0) << endl;
-	cout << F(key, 16, "w1", 2, 0) << endl;
-	cout << F(key, 16, "w2", 2, 0) << endl;
-	cout << F(key, 16, "w3", 2, 0) << endl;*/
+
 
 	return 0;
 }
