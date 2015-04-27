@@ -15,7 +15,7 @@
 
 #pragma comment(lib, "cryptlib.lib")
 
-#define ARRAY_SIZE 7
+#define ARRAY_SIZE 6
 #define FREE_SIZE 2
 #define SEARCH_TABLE_SIZE 65536
 #define DELETE_TABLE_SIZE 65536
@@ -55,6 +55,17 @@ string sha256(string text)
 	return result;
 }
 
+inline string hex_encoder(string raw)
+{
+	string hex;
+	StringSource ss2(raw, true,
+		new HexEncoder(
+		new StringSink(hex)
+		) // HexEncoder
+		); // StringSource
+	return hex;
+}
+
 string HMAC_SHA_256(byte *user_key, int user_key_len, string plain)
 {
 	SecByteBlock key(user_key, user_key_len);
@@ -68,8 +79,8 @@ string HMAC_SHA_256(byte *user_key, int user_key_len, string plain)
 		) // HexEncoder
 		); // StringSource
 
-	cout << "key: " << encoded << endl;
-	cout << "plain text: " << plain << endl;
+	//cout << "key: " << encoded << endl;
+	//cout << "plain text: " << plain << endl;
 
 	try
 	{
@@ -95,7 +106,7 @@ string HMAC_SHA_256(byte *user_key, int user_key_len, string plain)
 		) // HexEncoder
 		); // StringSource
 
-	cout << "hmac: " << encoded << endl;
+	//cout << "hmac: " << encoded << endl;
 
 	return mac;
 }
@@ -116,8 +127,8 @@ string CMAC_AES_128(byte *user_key, int user_key_len, string plain) // user_key_
 		) // HexEncoder
 		); // StringSource
 
-	cout << "key: " << encoded << endl;
-	cout << "plain text: " << plain << endl;
+	//cout << "key: " << encoded << endl;
+	//cout << "plain text: " << plain << endl;
 
 	try
 	{
@@ -143,7 +154,7 @@ string CMAC_AES_128(byte *user_key, int user_key_len, string plain) // user_key_
 		) // HexEncoder
 		); // StringSource
 
-	cout << "cmac: " << encoded << endl;
+	//cout << "cmac: " << encoded << endl;
 
 	return mac;
 }
@@ -709,7 +720,7 @@ class DSSE
 				temp_As_index = Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)].addr_s_N_first;
 				while (temp_As_index != -1)
 				{
-					H1 = HMAC_SHA_256((byte*)Kw.c_str(), sizeof(Kw), to_string(As[temp_As_index].r)); // generate a 256-bit key
+					H1 = HMAC_SHA_256((byte*)Kw.c_str(), Kw.size(), to_string(As[temp_As_index].r)); // generate a 256-bit key
 					H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
 					temp_ptr = (char*)&As[temp_As_index];
 					temp_As_index = As[temp_As_index].addr_s_next;
@@ -768,6 +779,129 @@ class DSSE
 
 			delete[] As_index;
 			delete[] Ad_index;
+
+			fstream enc_dest;
+			string path;
+			/* Write Ts to server */
+			for (int i = 0; i < keyeord_number; i++)
+			{
+				keyword_hash = F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0);
+				path = "./EncData/Ts_" + to_string(keyword_hash) + ".enc";
+				cout << "Open file: " << path << endl;
+				enc_dest.open(path, ios::out | ios::binary);
+				if (!enc_dest)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest.write((char*)&Ts[keyword_hash], sizeof(Ts[keyword_hash]));
+				enc_dest.close();
+			}
+
+			// for FREE As
+			keyword_hash = F(k1, sizeof(k1), FREE, 2, 0);
+			path = "./EncData/Ts_" + to_string(keyword_hash) + ".enc";
+			cout << "Open file: " << path << endl;
+			enc_dest.open(path, ios::out | ios::binary);
+			if (!enc_dest)
+				cerr << "Destination file create failed." << endl << endl;
+			enc_dest.write((char*)&Ts[keyword_hash], sizeof(Ts[keyword_hash]));
+			enc_dest.close();
+			cout << endl;
+			/* Write Ts to server */
+
+			/* Write Td to server */
+			for (int i = 0; i < file_number; i++)
+			{
+				file_hash = F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0);
+				path = "./EncData/Td_" + to_string(file_hash) + ".enc";
+				cout << "Open file: " << path << endl;
+				enc_dest.open(path, ios::out | ios::binary);
+				if (!enc_dest)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest.write((char*)&Td[file_hash], sizeof(Td[file_hash]));
+				enc_dest.close();
+			}
+			cout << endl;
+			/* Write Td to server */
+
+			/* Write As to server */
+			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
+			{
+				path = "./EncData/As_" + to_string(i) + ".enc";
+				cout << "Open file: " << path << endl;
+				enc_dest.open(path, ios::out | ios::binary);
+				if (!enc_dest)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest.write((char*)&As[i], sizeof(As[i]));
+				enc_dest.close();
+			}
+			/* Write As to server */
+
+			/* Write Ad to server */
+			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
+			{
+				path = "./EncData/Ad_" + to_string(i) + ".enc";
+				cout << "Open file: " << path << endl;
+				enc_dest.open(path, ios::out | ios::binary);
+				if (!enc_dest)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest.write((char*)&Ad[i], sizeof(Ad[i]));
+				enc_dest.close();
+			}
+			/* Write Ad to server */
+		}
+
+		void client_srch_token(byte *k1, int k1_len, byte *k2, int k2_len, byte *k3, int k3_len, string keyword, int *F_k1_w, string *G_k2_w, string *P_k3_w)
+		{
+			*F_k1_w = F(k1, k1_len, keyword, 2, 0);
+			*G_k2_w = CMAC_AES_128(k2, k2_len, keyword);
+			*P_k3_w = CMAC_AES_128(k3, k3_len, keyword);
+		}
+
+		void server_search(int F_k1_w, string G_k2_w, string P_k3_w)
+		{
+			struct search_table temp_Ts;
+			struct search_array temp_As;
+			char *temp_ptr;
+			string H1;
+			string sha256_id, id_encoded;
+
+			fstream enc_src;
+			string path = "./EncData/Ts_" + to_string(F_k1_w) + ".enc";
+			cout << "Open file: " << path << endl;
+			enc_src.open(path, ios::in, ios::binary);
+			if (!enc_src)
+				cerr << "No such file." << endl << endl;
+			else
+			{
+				enc_src.read((char*)&temp_Ts, sizeof(temp_Ts));
+				enc_src.close();
+				temp_ptr =(char*) &temp_Ts;
+				
+				for (int i = 0; i < sizeof(temp_Ts); i++)
+				{
+					temp_ptr[i] = temp_ptr[i] ^ G_k2_w.c_str()[i]; // decryption Ts
+				}
+				
+				path = "./EncData/As_" + to_string(temp_Ts.addr_s_N_first) + ".enc";
+				cout << "Open file: " << path << endl;
+				enc_src.open(path, ios::in, ios::binary);
+				if (!enc_src)
+					cerr << "No such file." << endl << endl;
+				else
+				{
+					enc_src.read((char*)&temp_As, sizeof(temp_As));
+					enc_src.close();
+					temp_ptr = (char*)&temp_As;
+					H1 = HMAC_SHA_256((byte*)P_k3_w.c_str(), P_k3_w.size(), to_string(temp_As.r)); // calculate a 256-bit key
+					H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
+					for (int i = 0; i < 36; i++)
+					{
+						temp_ptr[i] = temp_ptr[i] ^ H1.c_str()[i];
+					}
+					sha256_id.assign(temp_As.id, 32);
+					id_encoded = hex_encoder(sha256_id);// to show the hex data in the command line
+					cout << "Return file ID: " << id_encoded << endl;
+				}
+			}
 		}
 			
 	private:
@@ -787,10 +921,21 @@ int main()
 	
 	DSSE DSSE_obj;
 
+	byte k1[16], k2[16], k3[16], k4[16];
+	memset(k1, 0x00, sizeof(k1));
+	memset(k2, 0x01, sizeof(k2));
+	memset(k3, 0x02, sizeof(k3));
+	memset(k4, 0x03, sizeof(k4));
+
 	DSSE_obj.client_keygen();
 	DSSE_obj.client_index_build();
 	DSSE_obj.client_enc();
-	//DSSE_obj.search("w1");
+	
+	int F_k1_w;
+	string G_k2_w, P_k3_w;
+	
+	DSSE_obj.client_srch_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), "w1", &F_k1_w, &G_k2_w, &P_k3_w);
+	DSSE_obj.server_search(F_k1_w, G_k2_w, P_k3_w);
 	//DSSE_obj.search("w2");
 	//DSSE_obj.search("w3");
 
