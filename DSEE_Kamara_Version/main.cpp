@@ -164,7 +164,7 @@ int F(byte *user_key, int user_key_len, string keyword, int unit_bytes, int inde
 	string cmac = CMAC_AES_128(user_key, user_key_len, keyword);
 	byte temp[16];
 	string_to_byte(temp, cmac, 16);
-	unsigned short int *ptr_2byte;
+	unsigned short int *ptr_2byte = NULL;
 	if (unit_bytes == 2)
 	{
 		ptr_2byte = (unsigned short int*)temp;
@@ -900,6 +900,32 @@ class DSSE
 					sha256_id.assign(temp_As.id, 32);
 					id_encoded = hex_encoder(sha256_id);// to show the hex data in the command line
 					cout << "Return file ID: " << id_encoded << endl;
+					while (temp_As.addr_s_next != -1)
+					{
+						path = "./EncData/As_" + to_string(temp_As.addr_s_next) + ".enc";
+						cout << "Open file: " << path << endl;
+						enc_src.open(path, ios::in, ios::binary);
+						if (!enc_src)
+						{
+							cerr << "No such file." << endl << endl;
+							break;
+						}
+						else
+						{
+							enc_src.read((char*)&temp_As, sizeof(temp_As));
+							enc_src.close();
+							temp_ptr = (char*)&temp_As;
+							H1 = HMAC_SHA_256((byte*)P_k3_w.c_str(), P_k3_w.size(), to_string(temp_As.r)); // calculate a 256-bit key
+							H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
+							for (int i = 0; i < 36; i++)
+							{
+								temp_ptr[i] = temp_ptr[i] ^ H1.c_str()[i];
+							}
+							sha256_id.assign(temp_As.id, 32);
+							id_encoded = hex_encoder(sha256_id);// to show the hex data in the command line
+							cout << "Return file ID: " << id_encoded << endl;
+						}
+					}
 				}
 			}
 		}
@@ -918,7 +944,6 @@ class DSSE
 
 int main()
 {
-	
 	DSSE DSSE_obj;
 
 	byte k1[16], k2[16], k3[16], k4[16];
@@ -927,24 +952,90 @@ int main()
 	memset(k3, 0x02, sizeof(k3));
 	memset(k4, 0x03, sizeof(k4));
 
-	DSSE_obj.client_keygen();
-	DSSE_obj.client_index_build();
-	DSSE_obj.client_enc();
+	int F_k1_w; // search token
+	string G_k2_w, P_k3_w; //search token
+	string keyword;
 	
-	int F_k1_w;
-	string G_k2_w, P_k3_w;
-	
-	DSSE_obj.client_srch_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), "w1", &F_k1_w, &G_k2_w, &P_k3_w);
-	DSSE_obj.server_search(F_k1_w, G_k2_w, P_k3_w);
-	//DSSE_obj.search("w2");
-	//DSSE_obj.search("w3");
+	int opcode;
 
+	cout << "Enter OP code:" << endl;
+	cout << "	For client:" << endl;
+	cout << "		0: Generate key" << endl;
+	cout << "		1: Build keyword index" << endl;
+	cout << "		2: Build search encrypted index" << endl;
+	cout << "		3: Generate search token" << endl;
+	cout << "		4: Generate add token" << endl;
+	cout << "		5: Generate delete token" << endl;
+	cout << "	For server:" << endl;
+	cout << "		6: Keyword search" << endl;
+	cout << "		7: Add a file" << endl;
+	cout << "		8: Delete a file" << endl;
+	cout << "	Ctrl + Z: Exit" << endl;
+	cout << ">>";
+	while (cin >> opcode)
+	{
+		switch (opcode)
+		{
+		case 0:
+			DSSE_obj.client_keygen();
+			cout << "Key generateion complete." << endl;
+			break;
 
-	//DSSE_obj.add();
-	//DSSE_obj.search("w1");
-	
+		case 1:
+			DSSE_obj.client_index_build();
+			cout << "Keyword building complete." << endl;
+			break;
 
+		case 2:
+			DSSE_obj.client_enc();
+			cout << "Search encrypted index building compllete." << endl;
+			break;
 
+		case 3:
+			cout << "Enter a keyword: " << endl << ">>";
+			cin >> keyword;
+			DSSE_obj.client_srch_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), keyword, &F_k1_w, &G_k2_w, &P_k3_w);
+			break;
+
+		case 4:
+
+			break;
+
+		case 5:
+
+			break;
+
+		case 6:
+			DSSE_obj.server_search(F_k1_w, G_k2_w, P_k3_w);
+			break;
+
+		case 7:
+
+			break;
+
+		case 8:
+
+			break;
+
+		default:
+			cout << "Opcode is incorrect..." << endl;
+		}
+
+		cout << "Enter OP code:" << endl;
+		cout << "	For client:" << endl;
+		cout << "		0: Generate key" << endl;
+		cout << "		1: Build keyword index" << endl;
+		cout << "		2: Build search encrypted index" << endl;
+		cout << "		3: Generate search token" << endl;
+		cout << "		4: Generate add token" << endl;
+		cout << "		5: Generate delete token" << endl;
+		cout << "	For server:" << endl;
+		cout << "		6: Keyword search" << endl;
+		cout << "		7: Add a file" << endl;
+		cout << "		8: Delete a file" << endl;
+		cout << "	Ctrl + Z: Exit" << endl;
+		cout << ">>";
+	}
 
 	return 0;
 }
