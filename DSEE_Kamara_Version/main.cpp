@@ -624,7 +624,6 @@ class DSSE
 				}
 			}
 			/* build addr_d(N+1) */
-			cout << endl;
 
 			/* build addr_d(N-1) */
 			for (int i = 0; i < file_number; i++)
@@ -787,7 +786,7 @@ class DSSE
 			{
 				keyword_hash = F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0);
 				path = "./EncData/Ts_" + to_string(keyword_hash) + ".enc";
-				cout << "Open file: " << path << endl;
+				cout << "Create file: " << path << endl;
 				enc_dest.open(path, ios::out | ios::binary);
 				if (!enc_dest)
 					cerr << "Destination file create failed." << endl << endl;
@@ -795,10 +794,10 @@ class DSSE
 				enc_dest.close();
 			}
 
-			// for FREE As
+			// for free As index, Ts
 			keyword_hash = F(k1, sizeof(k1), FREE, 2, 0);
-			path = "./EncData/Ts_" + to_string(keyword_hash) + ".enc";
-			cout << "Open file: " << path << endl;
+			path = "./EncData/Ts_Free";
+			cout << "Create file: " << path << endl;
 			enc_dest.open(path, ios::out | ios::binary);
 			if (!enc_dest)
 				cerr << "Destination file create failed." << endl << endl;
@@ -812,7 +811,7 @@ class DSSE
 			{
 				file_hash = F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0);
 				path = "./EncData/Td_" + to_string(file_hash) + ".enc";
-				cout << "Open file: " << path << endl;
+				cout << "Create file: " << path << endl;
 				enc_dest.open(path, ios::out | ios::binary);
 				if (!enc_dest)
 					cerr << "Destination file create failed." << endl << endl;
@@ -826,7 +825,7 @@ class DSSE
 			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
 			{
 				path = "./EncData/As_" + to_string(i) + ".enc";
-				cout << "Open file: " << path << endl;
+				cout << "Create file: " << path << endl;
 				enc_dest.open(path, ios::out | ios::binary);
 				if (!enc_dest)
 					cerr << "Destination file create failed." << endl << endl;
@@ -839,7 +838,7 @@ class DSSE
 			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
 			{
 				path = "./EncData/Ad_" + to_string(i) + ".enc";
-				cout << "Open file: " << path << endl;
+				cout << "Create file: " << path << endl;
 				enc_dest.open(path, ios::out | ios::binary);
 				if (!enc_dest)
 					cerr << "Destination file create failed." << endl << endl;
@@ -867,14 +866,14 @@ class DSSE
 			fstream enc_src;
 			string path = "./EncData/Ts_" + to_string(F_k1_w) + ".enc";
 			cout << "Open file: " << path << endl;
-			enc_src.open(path, ios::in, ios::binary);
+			enc_src.open(path, ios::in | ios::binary);
 			if (!enc_src)
 				cerr << "No such file." << endl << endl;
 			else
 			{
 				enc_src.read((char*)&temp_Ts, sizeof(temp_Ts));
 				enc_src.close();
-				temp_ptr =(char*) &temp_Ts;
+				temp_ptr =(char*)&temp_Ts;
 				
 				for (int i = 0; i < sizeof(temp_Ts); i++)
 				{
@@ -883,7 +882,7 @@ class DSSE
 				
 				path = "./EncData/As_" + to_string(temp_Ts.addr_s_N_first) + ".enc";
 				cout << "Open file: " << path << endl;
-				enc_src.open(path, ios::in, ios::binary);
+				enc_src.open(path, ios::in | ios::binary);
 				if (!enc_src)
 					cerr << "No such file." << endl << endl;
 				else
@@ -904,7 +903,7 @@ class DSSE
 					{
 						path = "./EncData/As_" + to_string(temp_As.addr_s_next) + ".enc";
 						cout << "Open file: " << path << endl;
-						enc_src.open(path, ios::in, ios::binary);
+						enc_src.open(path, ios::in | ios::binary);
 						if (!enc_src)
 						{
 							cerr << "No such file." << endl << endl;
@@ -927,6 +926,314 @@ class DSSE
 						}
 					}
 				}
+			}
+		}
+
+		string client_add_token(byte *k1, int k1_len, byte *k2, int k2_len, byte *k3, int k3_len, string file_name) // return the numbers of keyword are included in a new file
+		{
+			/* For 32-bit random number r and r_p */
+			random_device rd;
+			default_random_engine eng{ rd() };
+			uniform_int_distribution<> dist;
+			/* For 32-bit random number r and r_p */
+
+			fstream token_file;
+			string path;
+
+			static int counter = 0;
+			string keyword;
+
+			int F_k1_w, F_k1_f;
+			string G_k2_w, G_k2_f, P_k3_w, P_k3_f, H1, H2;
+			struct search_array As;
+			struct del_array Ad;
+			string file_name_hash = sha256(file_name); // ID
+			char *ptr = NULL;
+
+			F_k1_f = F(k1, k1_len, file_name_hash, 2, 0);
+			G_k2_f = CMAC_AES_128(k2, k2_len, file_name_hash);
+			P_k3_f = CMAC_AES_128(k3, k3_len, file_name_hash);
+
+			path = "./AddToken/Pi_" + to_string(counter);
+			
+			token_file.open(path, ios::out | ios::binary);
+			token_file.write((char*)&F_k1_f, sizeof(F_k1_f));
+			token_file.write(G_k2_f.c_str(), G_k2_f.size());
+
+			while (1)
+			{
+				cout << "Please enter the keyword in this file, enter \"EXIT\" to finish: " << endl << ">>";
+				cin >> keyword;
+				if (keyword == "EXIT")
+				{
+					break;
+					token_file.close();
+				}
+
+				F_k1_w = F(k1, k1_len, keyword, 2, 0);
+				G_k2_w = CMAC_AES_128(k2, k2_len, keyword);
+				P_k3_w = CMAC_AES_128(k3, k3_len, keyword);
+
+				As.r = dist(eng);
+				Ad.r_p = dist(eng);
+
+				H1 = HMAC_SHA_256((byte*)P_k3_w.c_str(), P_k3_w.size(), to_string(As.r)); // generate a 256-bit key
+				H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
+				H2 = HMAC_SHA_256((byte*)P_k3_f.c_str(), P_k3_f.size(), to_string(Ad.r_p));
+
+				string_to_byte((byte*)As.id, file_name_hash, 32); // store ID to As
+				As.addr_s_next = 0;
+
+				Ad.keyword_hash = F_k1_w;
+				Ad.addr_d_next = Ad.addr_d_next_file = Ad.addr_d_prev_file = Ad.addr_s_file = Ad.addr_s_next_file = Ad.addr_s_prev_file = 0;
+
+				ptr = (char*)&As;
+				for (int i = 0; i < 36; i++) // encryption As
+				{
+					ptr[i] = ptr[i] ^ H1.c_str()[i];
+				}
+
+				ptr = (char*)&Ad;
+				for (int i = 0; i < 28; i++) // encryption Ad
+				{
+					ptr[i] = ptr[i] ^ H2.c_str()[i];
+				}
+				
+				token_file.write((char*)&F_k1_w, sizeof(F_k1_w));
+				token_file.write(G_k2_w.c_str(), G_k2_w.size());
+				token_file.write((char*)&As, sizeof(As));
+				token_file.write((char*)&Ad, sizeof(Ad));
+			}
+
+			token_file.close();
+			cout << "Create a add token file: " << path << endl;
+			counter++;
+
+			return path;
+		}
+
+		void server_add(string path)
+		{
+			fstream token_file, Td_file, Ts_file, As_file, Ad_file, next_As_file;
+			string Td_path, Ts_path, As_path, Ad_path;
+			char *ptr1 = NULL, *ptr2 = NULL;
+
+			int F_k1_w, F_k1_f;
+			char buf[16];
+			string G_k2_w, G_k2_f;
+			struct search_array As, free_As, As_buf, next_As;
+			struct del_array Ad, Ad_buf, token_Ad;
+			struct search_table Ts, free_Ts;
+			struct del_table Td;
+			int new_N_first, new_N_first_dual;
+
+			token_file.open(path, ios::in | ios::binary);
+			if (!token_file)
+			{
+				cerr << "Error: cannot open token file: " << path << endl;
+			}
+			else
+			{
+				cout << "Open a add token file: " << path << endl;
+				
+				/* Get token file size */
+				token_file.seekg(0, token_file.end);
+				int length = token_file.tellg();
+				token_file.seekg(0, token_file.beg);
+				cout << "Token file size: " << length << " bytes" << endl;
+				/* Get token file size */
+
+				token_file.read((char*)&F_k1_f, sizeof(F_k1_f));
+				token_file.read(buf, sizeof(buf));
+				G_k2_f.assign(buf, sizeof(buf));
+				Td_path = "./EncData/Td_" + to_string(F_k1_f) + ".enc";
+				cout << "Create a new Td file: " << Td_path << endl;
+				Td_file.open(Td_path, ios::out | ios::binary);
+				if (!Td_file)
+				{
+					cerr << "Error: create Td file failed." << endl;
+					return;
+				}
+				
+				while ((int)token_file.tellg() != length)
+				{
+					memset(&Ad_buf, 0, sizeof(Ad_buf));
+
+					token_file.read((char*)&F_k1_w, sizeof(F_k1_w));
+					token_file.read(buf, sizeof(buf));
+					G_k2_w.assign(buf, sizeof(buf));
+					token_file.read((char*)&As, sizeof(As));
+					token_file.read((char*)&token_Ad, sizeof(token_Ad));
+
+					cout << "Search free As" << endl;
+					Ts_path = "./EncData/Ts_Free"; // Open Ts_Free
+					Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
+					if (!Ts_file)
+					{
+						cerr << "Error: open file: " << Ts_path << " failed." << endl;
+					}
+					else
+					{
+						cout << "Open free As index file: " << Ts_path << endl;
+						Ts_file.read((char*)&free_Ts, sizeof(free_Ts));
+						Ts_file.seekg(0, Ts_file.beg);
+
+						cout << "Free As index: " << free_Ts.addr_s_N_first << endl;
+
+						As_path = "./EncData/As_" + to_string(free_Ts.addr_s_N_first) + ".enc"; // Open free As
+						As_file.open(As_path, ios::in | ios::out | ios::binary);
+						if (!As_file)
+						{
+							cerr << "Error: Open file: " << As_path << " failed." << endl;
+						}
+						else
+						{
+							cout << "Open free As file: " << As_path << endl;
+							As_file.read((char*)&free_As, sizeof(free_As));
+							As_file.seekg(0, As_file.beg);
+							cout << "The corresponding Ad index: " << free_As.r << endl;
+							if (free_As.addr_s_next == -1)
+								cout << "As already is full!" << endl;
+							else
+								cout << "Next free As index: " << free_As.addr_s_next << endl; // Phi_prev
+							
+							new_N_first_dual = free_As.r; // Phi*
+							new_N_first = free_Ts.addr_s_N_first; // Phi
+							Ad_buf.addr_s_prev_file = new_N_first; // prepare Ad_buf for update dual of As
+							Ad_buf.addr_d_prev_file = new_N_first_dual;
+
+							free_Ts.addr_s_N_first = free_As.addr_s_next;
+							Ts_file.write((char*)&free_Ts, sizeof(free_Ts)); // update search table Ts for free
+							Ts_file.close();
+							
+							/* Update Ad */
+							Ts_path = "EncData/Ts_" + to_string(F_k1_w) +".enc"; // open Ts for a keywoord
+							Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
+							if (!Ts_file)
+							{
+								cerr << "Error: open file: " << Ts_path << " failed." << endl;
+							}
+							else
+							{
+								cout << "Open As index file for some keyword: " << Ts_path << endl;
+								Ts_file.read((char*)&Ts, sizeof(Ts));
+								Ts_file.seekg(0, Ts_file.beg);
+								ptr1 = (char*)&Ts;
+								for (int i = 0; i < sizeof(Ts); i++) // decryption Ts
+								{
+									ptr1[i] = ptr1[i] ^ G_k2_w.c_str()[i];
+								}
+								cout << "Next As index for some keyword: " << Ts.addr_s_N_first << endl; // Alpha
+								cout << "Dual Ad index for some keyword: " << Ts.addr_d_N_first_dual << endl; // Alpha*
+
+								Ad_path = "./EncData/Ad_" + to_string(Ts.addr_d_N_first_dual);
+								cout << "Open dual Ad file: " << path << endl;
+								Ad_file.open(Ad_path, ios::in | ios::out | ios::binary);
+								if (!Ad_file)
+								{
+									cerr << "Error: open file: " << Ad_path << " failed." << endl;
+								}
+								else
+								{
+									Ad_file.read((char*)&Ad, sizeof(Ad));
+									Ad_file.seekg(0, Ad_file.beg);
+									ptr1 = (char*)&Ad;
+									ptr2 = (char*)&Ad_buf;
+									for (int i = 0; i < sizeof(Ad); i++) // for reserve H2
+									{
+										ptr1[i] = ptr1[i] ^ ptr2[i];
+									}
+									Ad_file.write((char*)&Ad, sizeof(Ad)); // update Ad[Alpha*]
+									Ad_file.close();
+								}
+								
+								memset(&Ad_buf, 0, sizeof(Ad_buf));
+
+								As_path = "./EncData/As_" + to_string(free_As.addr_s_next) + ".enc";
+								next_As_file.open(As_path, ios::in | ios::binary);
+								if (!next_As_file)
+								{
+									cerr << "Error: open file: " << As_path << " failed." << endl;
+								}
+								else
+								{
+									next_As_file.read((char*)&next_As, sizeof(next_As));
+									next_As_file.close();
+									
+									if ((int)token_file.tellg() == length)
+										Ad_buf.addr_d_next = -1; // Phi*_prev
+									else
+										Ad_buf.addr_d_next = next_As.r; // Phi*_prev
+									
+									Ad_buf.addr_d_next_file = Ts.addr_d_N_first_dual;
+									Ad_buf.addr_s_file = Ts.addr_d_N_first_dual;
+									Ad_buf.addr_s_next_file = Ts.addr_s_N_first;
+
+									Ad_path = "./EncData/Ad_" + to_string(new_N_first_dual);
+									cout << "Open dual Ad file: " << path << endl;
+									Ad_file.open(Ad_path, ios::in | ios::out | ios::binary);
+									if (!Ad_file)
+									{
+										cerr << "Error: open file: " << Ad_path << " failed." << endl;
+									}
+									else
+									{
+										Ad_file.read((char*)&Ad, sizeof(Ad));
+										Ad_file.seekg(0, Ad_file.beg);
+										ptr1 = (char*)&Ad;
+										ptr2 = (char*)&Ad_buf;
+
+										for (int i = 0; i < sizeof(Ad); i++)
+										{
+											ptr1[i] = ptr1[i] ^ ptr2[i];
+											Ad_file.write((char*)&Ad, sizeof(Ad));
+											Ad_file.close();
+										}
+									}
+
+								}
+								/* Update Ad */
+
+								/* Update Td */
+								if ((int)token_file.tellg() == length)
+								{
+									Td.addr_d_D_first = new_N_first_dual;
+
+									ptr1 = (char*)&Td;
+									for (int i = 0; i < sizeof(Td); i++)
+									{
+										ptr1[i] = ptr1[i] ^ G_k2_f.c_str()[i];
+									}
+								}
+								/* Update Td */
+
+								ptr1 = (char*)&As;
+								ptr2 = (char*)&As_buf;
+								memset(ptr2, 0, sizeof(As_buf));
+								As_buf.addr_s_next = Ts.addr_s_N_first;
+								for (int i = 0; i < sizeof(As); i++) // for reverse H1
+								{
+									ptr1[i] = ptr1[i] ^ ptr2[i];
+								}
+								As_file.write(ptr1, sizeof(As));
+								As_file.close();
+
+								Ts.addr_s_N_first = new_N_first; // update the search table
+								Ts.addr_d_N_first_dual = new_N_first_dual;
+								
+								ptr1 = (char*)&Ts;
+								for (int i = 0; i < sizeof(Ts); i++) // re-encryption
+								{
+									ptr1[i] = ptr1[i] ^ G_k2_w.c_str()[i];
+								}
+								Ts_file.write((char*)&Ts, sizeof(Ts));
+								Ts_file.close();
+							}
+						}
+					}
+				}
+				Td_file.close();
+				token_file.close();
 			}
 		}
 			
@@ -954,11 +1261,12 @@ int main()
 
 	int F_k1_w; // search token
 	string G_k2_w, P_k3_w; //search token
-	string keyword;
+	string keyword, file_name;
+	string add_token;
 	
 	int opcode;
 
-	cout << "Enter OP code:" << endl;
+	cout << endl << "Enter OP code:" << endl;
 	cout << "	For client:" << endl;
 	cout << "		0: Generate key" << endl;
 	cout << "		1: Build keyword index" << endl;
@@ -998,7 +1306,9 @@ int main()
 			break;
 
 		case 4:
-
+			cout << "Enter the file name: " << endl << ">>";
+			cin >> file_name;
+			add_token = DSSE_obj.client_add_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), file_name);
 			break;
 
 		case 5:
@@ -1010,7 +1320,7 @@ int main()
 			break;
 
 		case 7:
-
+			DSSE_obj.server_add(add_token);
 			break;
 
 		case 8:
@@ -1021,7 +1331,7 @@ int main()
 			cout << "Opcode is incorrect..." << endl;
 		}
 
-		cout << "Enter OP code:" << endl;
+		cout << endl << "Enter OP code:" << endl;
 		cout << "	For client:" << endl;
 		cout << "		0: Generate key" << endl;
 		cout << "		1: Build keyword index" << endl;
