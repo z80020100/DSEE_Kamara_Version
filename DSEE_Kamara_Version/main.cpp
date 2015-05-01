@@ -739,7 +739,7 @@ class DSSE
 				temp_Ad_index = Td[F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0)].addr_d_D_first;
 				while (temp_Ad_index != -1)
 				{
-					H2 = HMAC_SHA_256((byte*)Kf.c_str(), sizeof(Kf), to_string(Ad[temp_Ad_index].r_p));
+					H2 = HMAC_SHA_256((byte*)Kf.c_str(), Kf.size(), to_string(Ad[temp_Ad_index].r_p));
 					temp_ptr = (char*)&Ad[temp_Ad_index];
 					temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
 					for (int j = 0; j < 28; j++)
@@ -848,11 +848,11 @@ class DSSE
 			/* Write Ad to server */
 		}
 
-		void client_srch_token(byte *k1, int k1_len, byte *k2, int k2_len, byte *k3, int k3_len, string keyword, int *F_k1_w, string *G_k2_w, string *P_k3_w)
+		void client_srch_token(string keyword, int *F_k1_w, string *G_k2_w, string *P_k3_w)
 		{
-			*F_k1_w = F(k1, k1_len, keyword, 2, 0);
-			*G_k2_w = CMAC_AES_128(k2, k2_len, keyword);
-			*P_k3_w = CMAC_AES_128(k3, k3_len, keyword);
+			*F_k1_w = F(k1, sizeof(k1), keyword, 2, 0);
+			*G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword);
+			*P_k3_w = CMAC_AES_128(k3, sizeof(k3), keyword);
 		}
 
 		void server_search(int F_k1_w, string G_k2_w, string P_k3_w)
@@ -929,7 +929,7 @@ class DSSE
 			}
 		}
 
-		string client_add_token(byte *k1, int k1_len, byte *k2, int k2_len, byte *k3, int k3_len, string file_name) // return the numbers of keyword are included in a new file
+		string client_add_token(string file_name) // return the numbers of keyword are included in a new file
 		{
 			/* For 32-bit random number r and r_p */
 			random_device rd;
@@ -950,9 +950,9 @@ class DSSE
 			string file_name_hash = sha256(file_name); // ID
 			char *ptr = NULL;
 
-			F_k1_f = F(k1, k1_len, file_name_hash, 2, 0);
-			G_k2_f = CMAC_AES_128(k2, k2_len, file_name_hash);
-			P_k3_f = CMAC_AES_128(k3, k3_len, file_name_hash);
+			F_k1_f = F(k1, sizeof(k1), file_name_hash, 2, 0);
+			G_k2_f = CMAC_AES_128(k2, sizeof(k2), file_name_hash);
+			P_k3_f = CMAC_AES_128(k3, sizeof(k3), file_name_hash);
 
 			path = "./AddToken/Pi_" + to_string(counter);
 			
@@ -970,9 +970,9 @@ class DSSE
 					token_file.close();
 				}
 
-				F_k1_w = F(k1, k1_len, keyword, 2, 0);
-				G_k2_w = CMAC_AES_128(k2, k2_len, keyword);
-				P_k3_w = CMAC_AES_128(k3, k3_len, keyword);
+				F_k1_w = F(k1, sizeof(k1), keyword, 2, 0);
+				G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword);
+				P_k3_w = CMAC_AES_128(k3, sizeof(k3), keyword);
 
 				As.r = dist(eng);
 				Ad.r_p = dist(eng);
@@ -1236,6 +1236,165 @@ class DSSE
 				token_file.close();
 			}
 		}
+
+		void client_del_token(string file_name, int *F_k1_f, string *G_k2_f, string *P_k3_f, string *sha256_id)
+		{
+			*sha256_id = sha256(file_name);
+			*F_k1_f = F(k1, sizeof(k1), *sha256_id, 2, 0);
+			*G_k2_f = CMAC_AES_128(k2, sizeof(k2), *sha256_id);
+			*P_k3_f = CMAC_AES_128(k3, sizeof(k3), *sha256_id);
+		}
+
+		void server_del(int F_k1_f, string G_k2_f, string P_k3_f, string sha256_id)
+		{
+			fstream Td_file, Ad_file, As_file, Ts_file;
+			struct del_table Td;
+			struct del_array Ad;
+			struct search_array As, As_buf;
+			struct search_table Ts, Ts_buf;
+			string Td_path, Ad_path, As_path, Ts_path;
+			char *ptr, *ptr_buf;
+			string H2;
+
+			Td_path = "./EncData/Td_" + to_string(F_k1_f) + ".enc";
+			cout << "Open delete table: " << Td_path << endl;
+			Td_file.open(Td_path, ios::in | ios::binary);
+			if (!Td_file)
+			{
+				cerr << "Error: Td file open faild..." << endl;
+			}
+			else
+			{
+				Td_file.read((char*)&Td, sizeof(Td));
+				Td_file.close();
+				
+				ptr = (char*)&Td;
+				for (int i = 0; i < sizeof(Td); i++) // decryption Td
+				{
+					ptr[i] = ptr[i] ^ G_k2_f.c_str()[i];
+				}
+				cout << "Ad index for some file: " << Td.addr_d_D_first<< endl;
+				Ad_path = "./EncData/Ad_" + to_string(Td.addr_d_D_first) + ".enc";
+				cout << "Open file: " << Ad_path << endl;
+				Ad_file.open(Ad_path, ios::in | ios::out | ios::binary); // Open Ad_i
+				if (!Ad_file)
+					cerr << "Error: Ad file open faild..." << endl;
+				else
+				{
+					Ad_file.read((char*)&Ad, sizeof(Ad)); // Read Ad_i to memory
+					
+					H2 = HMAC_SHA_256((byte*)P_k3_f.c_str(), P_k3_f.size(), to_string(Ad.r_p));
+					ptr = (char*)&Ad;
+					for (int i = 0; i < 28; i++) // decryption Ad
+					{
+						ptr[i] = ptr[i] ^ H2.c_str()[i];
+					}
+					cout << "Next Ad_i+1 index                 : " << Ad.addr_d_next << endl;
+					cout << "Previous Ad_-1 index for As_-1    : " << Ad.addr_d_prev_file << endl;
+					cout << "Next Ad_+1 index for As_+1        : " << Ad.addr_d_next_file << endl;
+					cout << "Dual As_i index                     : " << Ad.addr_s_file << endl;
+					cout << "Dual As_-1 index for previous file: " << Ad.addr_s_prev_file << endl;
+					cout << "Dual As_+1 index for next file    : " << Ad.addr_s_next_file << endl;
+					cout << "Keyword hash: " << Ad.keyword_hash << endl;
+
+					Ts_path = "./EncData/Ts_Free";
+					Ts_file.open(Ts_path, ios::in | ios::out | ios::binary); // open Ts_Free for find the free As 
+					if (!Ts_file)
+						cerr << "Open " << Ts_path << " failed..." << endl;
+					else
+					{
+						Ts_file.read((char*)&Ts, sizeof(Ts));
+						Ts_file.seekg(0, Ts_file.beg);
+
+						/* Free the corrsponding As_i */
+						As_path = "./EncData/As_" + to_string(Ad.addr_s_file) + ".enc";
+						As_file.open(As_path, ios::out | ios::binary);
+						if (!As_file)
+							cerr << "Error: open " << As_path << " failed..." << endl;
+						else
+						{
+							cout << "Open As file: " << As_path << endl;
+							memset(As.id, -1, 32);
+							As.addr_s_next = Ts.addr_s_N_first;
+							As.r = Td.addr_d_D_first; // for free As, it point to the dual free Ad
+							As_file.write((char*)&As, sizeof(As));
+							As_file.close();
+ 						}
+						/* Free the corrsponding As_i */
+
+						Ts.addr_s_N_first = Ad.addr_s_file; // update Ts_Free to point to new free As
+						Ts_file.write((char*)&Ts, sizeof(Ts));
+						Ts_file.close();
+					}
+
+					/* Update As_-1 */
+					if (Ad.addr_s_prev_file == -1) // no previous As, so we need to update Ts[F(w)]
+					{
+						Ts_path = "./EncData/Ts_" + to_string(Ad.keyword_hash) + ".enc";
+						cout << "No previous As!" << endl;
+						cout << "Open: " << Ts_path << endl;
+						Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
+						if (!Ts_file)
+							cerr << "Error: open " << Ts_path << " failed..." << endl;
+						else
+						{
+							Ts_file.read((char*)&Ts, sizeof(Ts));
+							Ts_file.seekg(0, Ts_file.beg);
+							memset(&Ts_buf, 0, sizeof(Ts_buf));
+							Ts_buf.addr_s_N_first = Ad.addr_s_file ^ Ad.addr_s_next_file;
+							Ts_buf.addr_d_N_first_dual = Td.addr_d_D_first ^ Ad.addr_d_next_file;
+							ptr = (char*)&Ts;
+							ptr_buf = (char*)&Ts_buf;
+							for (int i = 0; i < sizeof(Ts); i++)
+							{
+								ptr[i] = ptr[i] ^ ptr_buf[i];
+							}
+							Ts_file.write((char*)&Ts, sizeof(Ts));
+							Ts_file.close();
+						}
+					}
+					else // update previous As_i-1
+					{
+						As_path = "./EncData/As_" + to_string(Ad.addr_s_prev_file) + ".enc";
+						cout << "Open file: " << As_path << endl;
+						As_file.open(As_path, ios::in | ios::out | ios::binary);
+						if (!As_file)
+							cerr << "Error: open " << As_path << " failed..." << endl;
+						else
+						{
+							As_file.read((char*)&As, sizeof(As));
+							As_file.seekg(0, As_file.beg);
+							memset(&As_buf, 0, sizeof(As_buf));
+							As_buf.addr_s_next = Ad.addr_s_file ^ Ad.addr_s_next_file;
+							ptr = (char*)&As;
+							ptr_buf = (char*)&As_buf;
+							for (int i = 0; i < sizeof(As); i++)
+							{
+								ptr[i] = ptr[i] ^ ptr_buf[i];
+							}
+							As_file.write((char*)&As, sizeof(As));
+							As_file.close();
+						}
+					}
+					/* Update As_-1 */
+
+					/* Update Ad_-1 */
+					/* Update Ad_-1 */
+
+					/* Update Ad_+1 */
+					/* Update Ad_+1 */
+
+					/* Update Ts_Free */
+					/* Update Ts_Free */
+
+					/* Delete D_i */
+					/* Delete D_i */
+
+					Ad_file.close();
+				}
+			}
+			
+		}
 			
 	private:
 		byte k1[16], k2[16], k3[16], k4[16];
@@ -1253,16 +1412,14 @@ int main()
 {
 	DSSE DSSE_obj;
 
-	byte k1[16], k2[16], k3[16], k4[16];
-	memset(k1, 0x00, sizeof(k1));
-	memset(k2, 0x01, sizeof(k2));
-	memset(k3, 0x02, sizeof(k3));
-	memset(k4, 0x03, sizeof(k4));
-
 	int F_k1_w; // search token
 	string G_k2_w, P_k3_w; //search token
 	string keyword, file_name;
-	string add_token;
+	string add_token; // add token file path
+
+	int F_k1_f; // selete tokwn
+	string G_k2_f, P_k3_f; //delete token
+	string sha256_id;
 	
 	int opcode;
 
@@ -1300,19 +1457,25 @@ int main()
 			break;
 
 		case 3:
-			cout << "Enter a keyword: " << endl << ">>";
+			cout << "Enter a keyword you want to search: " << endl << ">>";
 			cin >> keyword;
-			DSSE_obj.client_srch_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), keyword, &F_k1_w, &G_k2_w, &P_k3_w);
+			DSSE_obj.client_srch_token(keyword, &F_k1_w, &G_k2_w, &P_k3_w);
+			cout << "Generate a search token for keyword: " << keyword << endl;
 			break;
 
 		case 4:
-			cout << "Enter the file name: " << endl << ">>";
+			cout << "Enter the file name you want to add: " << endl << ">>";
 			cin >> file_name;
-			add_token = DSSE_obj.client_add_token(k1, sizeof(k1), k2, sizeof(k2), k3, sizeof(k3), file_name);
+			add_token = DSSE_obj.client_add_token(file_name);
+			cout << "Generate a add token file for new file: " << file_name << endl;
+			cout << "Add token file path: " << add_token << endl;
 			break;
 
 		case 5:
-
+			cout << "Enter the file name you want to delete: " << endl << ">>";
+			cin >> file_name;
+			DSSE_obj.client_del_token(file_name, &F_k1_f, &G_k2_f, &P_k3_f, &sha256_id);
+			cout << "Generate a delete token for file: " << file_name << endl;
 			break;
 
 		case 6:
@@ -1324,7 +1487,7 @@ int main()
 			break;
 
 		case 8:
-
+			DSSE_obj.server_del(F_k1_f, G_k2_f, P_k3_f, sha256_id);
 			break;
 
 		default:
