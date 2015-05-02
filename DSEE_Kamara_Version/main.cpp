@@ -1247,17 +1247,24 @@ class DSSE
 
 		void server_del(int F_k1_f, string G_k2_f, string P_k3_f, string sha256_id)
 		{
-			fstream Td_file, Ad_file, As_file, Ts_file;
+			fstream Td_file, Ad_file, As_file, Ts_file, Ad_temp_file;
 			struct del_table Td;
-			struct del_array Ad;
+			struct del_array Ad, Ad_temp, Ad_buf; // Ad_temp for Ad_prev and Ad_next
 			struct search_array As, As_buf;
 			struct search_table Ts, Ts_buf;
 			string Td_path, Ad_path, As_path, Ts_path;
 			char *ptr, *ptr_buf;
 			string H2;
+			int next_Ad = 0;
+
+			/* For 32-bit random number r and r_p */
+			random_device rd;
+			default_random_engine eng{ rd() };
+			uniform_int_distribution<> dist;
+			/* For 32-bit random number r and r_p */
 
 			Td_path = "./EncData/Td_" + to_string(F_k1_f) + ".enc";
-			cout << "Open delete table: " << Td_path << endl;
+			cout << "Open delete table file: " << Td_path << endl;
 			Td_file.open(Td_path, ios::in | ios::binary);
 			if (!Td_file)
 			{
@@ -1273,127 +1280,215 @@ class DSSE
 				{
 					ptr[i] = ptr[i] ^ G_k2_f.c_str()[i];
 				}
-				cout << "Ad index for some file: " << Td.addr_d_D_first<< endl;
-				Ad_path = "./EncData/Ad_" + to_string(Td.addr_d_D_first) + ".enc";
-				cout << "Open file: " << Ad_path << endl;
-				Ad_file.open(Ad_path, ios::in | ios::out | ios::binary); // Open Ad_i
-				if (!Ad_file)
-					cerr << "Error: Ad file open faild..." << endl;
-				else
+				
+				next_Ad = Td.addr_d_D_first;
+				while (next_Ad != -1)
 				{
-					Ad_file.read((char*)&Ad, sizeof(Ad)); // Read Ad_i to memory
-					
-					H2 = HMAC_SHA_256((byte*)P_k3_f.c_str(), P_k3_f.size(), to_string(Ad.r_p));
-					ptr = (char*)&Ad;
-					for (int i = 0; i < 28; i++) // decryption Ad
-					{
-						ptr[i] = ptr[i] ^ H2.c_str()[i];
-					}
-					cout << "Next Ad_i+1 index                 : " << Ad.addr_d_next << endl;
-					cout << "Previous Ad_-1 index for As_-1    : " << Ad.addr_d_prev_file << endl;
-					cout << "Next Ad_+1 index for As_+1        : " << Ad.addr_d_next_file << endl;
-					cout << "Dual As_i index                     : " << Ad.addr_s_file << endl;
-					cout << "Dual As_-1 index for previous file: " << Ad.addr_s_prev_file << endl;
-					cout << "Dual As_+1 index for next file    : " << Ad.addr_s_next_file << endl;
-					cout << "Keyword hash: " << Ad.keyword_hash << endl;
-
-					Ts_path = "./EncData/Ts_Free";
-					Ts_file.open(Ts_path, ios::in | ios::out | ios::binary); // open Ts_Free for find the free As 
-					if (!Ts_file)
-						cerr << "Open " << Ts_path << " failed..." << endl;
+					cout << "Ad_i index for some file: " << next_Ad << endl;
+					Ad_path = "./EncData/Ad_" + to_string(next_Ad) + ".enc";
+					cout << "Open delete array file: " << Ad_path << endl;
+					Ad_file.open(Ad_path, ios::in | ios::out | ios::binary); // Open Ad_i
+					if (!Ad_file)
+						cerr << "Error: Ad file open faild..." << endl;
 					else
 					{
-						Ts_file.read((char*)&Ts, sizeof(Ts));
-						Ts_file.seekg(0, Ts_file.beg);
+						Ad_file.read((char*)&Ad, sizeof(Ad)); // Read Ad_i to memory
+						Ad_file.seekg(0, Ad_file.beg);
 
-						/* Free the corrsponding As_i */
-						As_path = "./EncData/As_" + to_string(Ad.addr_s_file) + ".enc";
-						As_file.open(As_path, ios::out | ios::binary);
-						if (!As_file)
-							cerr << "Error: open " << As_path << " failed..." << endl;
-						else
+						H2 = HMAC_SHA_256((byte*)P_k3_f.c_str(), P_k3_f.size(), to_string(Ad.r_p));
+						ptr = (char*)&Ad;
+						for (int i = 0; i < 28; i++) // decryption Ad
 						{
-							cout << "Open As file: " << As_path << endl;
-							memset(As.id, -1, 32);
-							As.addr_s_next = Ts.addr_s_N_first;
-							As.r = Td.addr_d_D_first; // for free As, it point to the dual free Ad
-							As_file.write((char*)&As, sizeof(As));
-							As_file.close();
- 						}
-						/* Free the corrsponding As_i */
+							ptr[i] = ptr[i] ^ H2.c_str()[i];
+						}
+						cout << "Next Ad_i+1 index                 : " << Ad.addr_d_next << endl;
+						cout << "Previous Ad_-1 index for As_-1    : " << Ad.addr_d_prev_file << endl;
+						cout << "Next Ad_+1 index for As_+1        : " << Ad.addr_d_next_file << endl;
+						cout << "Dual As_i index                   : " << Ad.addr_s_file << endl;
+						cout << "Dual As_-1 index for previous file: " << Ad.addr_s_prev_file << endl;
+						cout << "Dual As_+1 index for next file    : " << Ad.addr_s_next_file << endl;
+						cout << "Keyword hash: " << Ad.keyword_hash << endl;
 
-						Ts.addr_s_N_first = Ad.addr_s_file; // update Ts_Free to point to new free As
-						Ts_file.write((char*)&Ts, sizeof(Ts));
-						Ts_file.close();
-					}
-
-					/* Update As_-1 */
-					if (Ad.addr_s_prev_file == -1) // no previous As, so we need to update Ts[F(w)]
-					{
-						Ts_path = "./EncData/Ts_" + to_string(Ad.keyword_hash) + ".enc";
-						cout << "No previous As!" << endl;
-						cout << "Open: " << Ts_path << endl;
-						Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
+						Ts_path = "./EncData/Ts_Free";
+						Ts_file.open(Ts_path, ios::in | ios::out | ios::binary); // open Ts_Free for find the free As 
 						if (!Ts_file)
-							cerr << "Error: open " << Ts_path << " failed..." << endl;
+							cerr << "Open " << Ts_path << " failed..." << endl;
 						else
 						{
 							Ts_file.read((char*)&Ts, sizeof(Ts));
 							Ts_file.seekg(0, Ts_file.beg);
-							memset(&Ts_buf, 0, sizeof(Ts_buf));
-							Ts_buf.addr_s_N_first = Ad.addr_s_file ^ Ad.addr_s_next_file;
-							Ts_buf.addr_d_N_first_dual = Td.addr_d_D_first ^ Ad.addr_d_next_file;
-							ptr = (char*)&Ts;
-							ptr_buf = (char*)&Ts_buf;
-							for (int i = 0; i < sizeof(Ts); i++)
+
+							/* Free the corrsponding As_i */
+							As_path = "./EncData/As_" + to_string(Ad.addr_s_file) + ".enc";
+							As_file.open(As_path, ios::out | ios::binary);
+							if (!As_file)
+								cerr << "Error: open " << As_path << " failed..." << endl;
+							else
 							{
-								ptr[i] = ptr[i] ^ ptr_buf[i];
+								cout << "Open As file: " << As_path << endl;
+								memset(As.id, -1, 32);
+								As.addr_s_next = Ts.addr_s_N_first; // point to next free As (the last free As originially)
+								As.r = Td.addr_d_D_first; // for free As, it point to the dual free Ad
+								As_file.write((char*)&As, sizeof(As));
+								As_file.close();
+								cout << "**** Free the file: " << As_path << " and point to the last free As originially As_" << Ts.addr_s_N_first << ".enc ****" << endl;
 							}
+							/* Free the corrsponding As_i */
+
+							Ts.addr_s_N_first = Ad.addr_s_file; // update Ts_Free to point to new free As
 							Ts_file.write((char*)&Ts, sizeof(Ts));
 							Ts_file.close();
+							cout << "**** Update the file: " << Ts_path << " to point to file: " << As_path <<" ****" << endl;
 						}
-					}
-					else // update previous As_i-1
-					{
-						As_path = "./EncData/As_" + to_string(Ad.addr_s_prev_file) + ".enc";
-						cout << "Open file: " << As_path << endl;
-						As_file.open(As_path, ios::in | ios::out | ios::binary);
-						if (!As_file)
-							cerr << "Error: open " << As_path << " failed..." << endl;
+
+
+						/* Update As_-1 */
+						if (Ad.addr_s_prev_file == -1) // no previous As, so we need to update Ts[F(w)]
+						{
+							Ts_path = "./EncData/Ts_" + to_string(Ad.keyword_hash) + ".enc";
+							cout << "No previous As_-1, modify seach table Ts!" << endl;
+							cout << "Open file: " << Ts_path << endl;
+							Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
+							if (!Ts_file)
+								cerr << "Error: open " << Ts_path << " failed..." << endl;
+							else
+							{
+								Ts_file.read((char*)&Ts, sizeof(Ts));
+								Ts_file.seekg(0, Ts_file.beg);
+								memset(&Ts_buf, 0, sizeof(Ts_buf));
+								Ts_buf.addr_s_N_first = Ad.addr_s_file ^ Ad.addr_s_next_file;
+								Ts_buf.addr_d_N_first_dual = Td.addr_d_D_first ^ Ad.addr_d_next_file;
+								ptr = (char*)&Ts;
+								ptr_buf = (char*)&Ts_buf;
+								for (int i = 0; i < sizeof(Ts); i++)
+								{
+									ptr[i] = ptr[i] ^ ptr_buf[i];
+								}
+								Ts_file.write((char*)&Ts, sizeof(Ts));
+								Ts_file.close();
+								cout << "**** Update the search table file: " << Ts_path << " ****" << endl;
+								cout << "	Point to the first As file index: " << Ad.addr_s_next_file << endl;
+								cout << "	Point to the dula Ad file index: " << Ad.addr_d_next_file << endl;
+							}
+						}
+						else // update previous As_-1
+						{
+							As_path = "./EncData/As_" + to_string(Ad.addr_s_prev_file) + ".enc";
+							cout << "Open previous As_-1 file : " << As_path << endl;
+							As_file.open(As_path, ios::in | ios::out | ios::binary);
+							if (!As_file)
+								cerr << "Error: open " << As_path << " failed..." << endl;
+							else
+							{
+								As_file.read((char*)&As, sizeof(As));
+								As_file.seekg(0, As_file.beg);
+								memset(&As_buf, 0, sizeof(As_buf));
+								As_buf.addr_s_next = Ad.addr_s_file ^ Ad.addr_s_next_file;
+								ptr = (char*)&As;
+								ptr_buf = (char*)&As_buf;
+								for (int i = 0; i < sizeof(As); i++)
+								{
+									ptr[i] = ptr[i] ^ ptr_buf[i];
+								}
+								As_file.write((char*)&As, sizeof(As));
+								As_file.close();
+								cout << "**** Update the search array file: " << As_path << " to point to As_" << Ad.addr_s_next_file << ".enc ****" << endl;
+							}
+						}
+						/* Update As_-1 */
+
+
+						/* Update Ad_-1 */
+						if (Ad.addr_d_prev_file == -1) // no previous Ad_-1
+						{
+							cout << "No previous Ad_-1, DO NOTHING!" << endl; // donothing
+						}
 						else
 						{
-							As_file.read((char*)&As, sizeof(As));
-							As_file.seekg(0, As_file.beg);
-							memset(&As_buf, 0, sizeof(As_buf));
-							As_buf.addr_s_next = Ad.addr_s_file ^ Ad.addr_s_next_file;
-							ptr = (char*)&As;
-							ptr_buf = (char*)&As_buf;
-							for (int i = 0; i < sizeof(As); i++)
+							Ad_path = "./EncData/Ad_" + to_string(Ad.addr_d_prev_file) + ".enc";
+							cout << "Open previous Ad_-1 file: " << Ad_path << endl;
+							Ad_temp_file.open(Ad_path, ios::in | ios::out | ios::binary);
+							if (!Ad_temp_file)
+								cerr << "Error: open " << Ad_path << " failed..." << endl;
+							else
 							{
-								ptr[i] = ptr[i] ^ ptr_buf[i];
+								Ad_temp_file.read((char*)&Ad_temp, sizeof(Ad_temp));
+								Ad_temp_file.seekg(0, Ad_temp_file.beg);
+								memset(&Ad_buf, 0, sizeof(Ad_buf));
+								Ad_buf.addr_d_next_file = Td.addr_d_D_first ^ Ad.addr_d_next_file;
+								Ad_buf.addr_s_next_file = Ad.addr_s_file ^ Ad.addr_s_next_file;
+								ptr = (char*)&Ad_temp;
+								ptr_buf = (char*)&Ad_buf;
+								for (int i = 0; i < sizeof(Ad_temp); i++)
+								{
+									ptr[i] = ptr[i] ^ ptr_buf[i];
+								}
+								Ad_temp_file.write((char*)&Ad_temp, sizeof(Ad_temp));
+								Ad_temp_file.close();
+								cout << "**** Update the delete array file: " << Ad_path << " : ****" << endl;
+								cout << "	Next Ad for next file index: " << Ad.addr_d_next_file << endl;
+								cout << "	Next As for next file index: " << Ad.addr_s_next_file << endl;
 							}
-							As_file.write((char*)&As, sizeof(As));
-							As_file.close();
 						}
+						/* Update Ad_-1 */
+
+
+						/* Update Ad_+1 */
+						if (Ad.addr_d_next_file == -1) // no next Ad_+1
+						{
+							cout << "No previous Ad_+1, DO NOTHING!" << endl; // donothing
+						}
+						else
+						{
+							Ad_path = "./EncData/Ad_" + to_string(Ad.addr_d_next_file) + ".enc";
+							cout << "Open previous Ad_+1 file: " << Ad_path << endl;
+							Ad_temp_file.open(Ad_path, ios::in | ios::out | ios::binary);
+							if (!Ad_temp_file)
+								cerr << "Error: open " << Ad_path << " failed..." << endl;
+							else
+							{
+								Ad_temp_file.read((char*)&Ad_temp, sizeof(Ad_temp));
+								Ad_temp_file.seekg(0, Ad_temp_file.beg);
+								memset(&Ad_buf, 0, sizeof(Ad_buf));
+								Ad_buf.addr_d_prev_file = Td.addr_d_D_first ^ Ad.addr_d_prev_file;
+								Ad_buf.addr_s_prev_file = Ad.addr_s_file ^ Ad.addr_s_prev_file;
+								ptr = (char*)&Ad_temp;
+								ptr_buf = (char*)&Ad_buf;
+								for (int i = 0; i < sizeof(Ad_temp); i++)
+								{
+									ptr[i] = ptr[i] ^ ptr_buf[i];
+								}
+								Ad_temp_file.write((char*)&Ad_temp, sizeof(Ad_temp));
+								Ad_temp_file.close();
+								cout << "**** Update the delete array file: " << Ad_path << " : ****" << endl;
+								cout << "	Previous Ad for previous file index: " << Ad.addr_d_prev_file << endl;
+								cout << "	Previous As for previous file index: " << Ad.addr_s_prev_file << endl;
+							}
+						}
+						/* Update Ad_+1 */
+
+
+						next_Ad = Ad.addr_d_next;
+						/* Free D_i by filling with random string */
+						Ad.addr_d_next = dist(eng);
+						Ad.addr_d_next_file = dist(eng);
+						Ad.addr_d_prev_file = dist(eng);
+						Ad.addr_s_file = dist(eng);
+						Ad.addr_s_next_file = dist(eng);
+						Ad.addr_s_prev_file = dist(eng);
+						Ad.keyword_hash = dist(eng);
+						Ad.r_p = dist(eng);
+						Ad_file.write((char*)&Ad, sizeof(Ad));
+						Ad_file.close();
+						cout << "**** Free D_i by filling with random string ****" << endl;
+						/* Free D_i by filling with random string */
 					}
-					/* Update As_-1 */
-
-					/* Update Ad_-1 */
-					/* Update Ad_-1 */
-
-					/* Update Ad_+1 */
-					/* Update Ad_+1 */
-
-					/* Update Ts_Free */
-					/* Update Ts_Free */
-
-					/* Delete D_i */
-					/* Delete D_i */
-
-					Ad_file.close();
+					cout << "**** Process a couple As-Ad pairs ****" << endl;
 				}
 			}
 			
+			/* Delete Td[F_k1_f] */
+			/* Delete Td[F_k1_f] */
 		}
 			
 	private:
