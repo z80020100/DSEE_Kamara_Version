@@ -950,6 +950,8 @@ class DSSE
 			string file_name_hash = sha256(file_name); // ID
 			char *ptr = NULL;
 
+			memset(&Ad, 0, sizeof(Ad));
+
 			F_k1_f = F(k1, sizeof(k1), file_name_hash, 2, 0);
 			G_k2_f = CMAC_AES_128(k2, sizeof(k2), file_name_hash);
 			P_k3_f = CMAC_AES_128(k3, sizeof(k3), file_name_hash);
@@ -985,7 +987,7 @@ class DSSE
 				As.addr_s_next = 0;
 
 				Ad.keyword_hash = F_k1_w;
-				Ad.addr_d_next = Ad.addr_d_next_file = Ad.addr_d_prev_file = Ad.addr_s_file = Ad.addr_s_next_file = Ad.addr_s_prev_file = 0;
+				//Ad.addr_d_next = Ad.addr_d_next_file = Ad.addr_d_prev_file = Ad.addr_s_file = Ad.addr_s_next_file = Ad.addr_s_prev_file = 0;
 
 				ptr = (char*)&As;
 				for (int i = 0; i < 36; i++) // encryption As
@@ -1014,18 +1016,22 @@ class DSSE
 
 		void server_add(string path)
 		{
-			fstream token_file, Td_file, Ts_file, As_file, Ad_file, next_As_file;
+			fstream token_file; // composed of F_k1_f, G_k2_f, F_k1_w, G_k2_w, As, Ad
+			fstream Td_file, Ts_file, As_file, Ad_file, next_As_file;
 			string Td_path, Ts_path, As_path, Ad_path;
-			char *ptr1 = NULL, *ptr2 = NULL;
+			char *ptr1 = NULL;
 
 			int F_k1_w, F_k1_f;
-			char buf[16];
+			char buf[16]; // to buffer G_k2_w and G_k2_f
 			string G_k2_w, G_k2_f;
-			struct search_array As, free_As, As_buf, next_As;
-			struct del_array Ad, Ad_buf, token_Ad;
+			
+			struct search_array As, token_As, free_As;
+			struct del_array Ad, token_Ad;
 			struct search_table Ts, free_Ts;
 			struct del_table Td;
-			int new_N_first, new_N_first_dual;
+			//int new_N_first, new_N_first_dual;
+			int As_free_i, Ad_free_i, As_free_i_next, Ad_free_i_next, As_w, Ad_w;
+
 
 			token_file.open(path, ios::in | ios::binary);
 			if (!token_file)
@@ -1046,76 +1052,78 @@ class DSSE
 				token_file.read((char*)&F_k1_f, sizeof(F_k1_f));
 				token_file.read(buf, sizeof(buf));
 				G_k2_f.assign(buf, sizeof(buf));
+				
+				/* Create a new Td[F_k1_f] */
 				Td_path = "./EncData/Td_" + to_string(F_k1_f) + ".enc";
 				cout << "Create a new Td file: " << Td_path << endl;
 				Td_file.open(Td_path, ios::out | ios::binary);
 				if (!Td_file)
 				{
-					cerr << "Error: create Td file failed." << endl;
+					cerr << "Error: create new Td file failed." << endl;
 					return;
 				}
+				/* Create a new Td[F_k1_f] */
 				
 				while ((int)token_file.tellg() != length)
 				{
-					memset(&Ad_buf, 0, sizeof(Ad_buf));
-
 					token_file.read((char*)&F_k1_w, sizeof(F_k1_w));
 					token_file.read(buf, sizeof(buf));
 					G_k2_w.assign(buf, sizeof(buf));
-					token_file.read((char*)&As, sizeof(As));
+					token_file.read((char*)&token_As, sizeof(token_As));
 					token_file.read((char*)&token_Ad, sizeof(token_Ad));
 
-					cout << "Search free As" << endl;
 					Ts_path = "./EncData/Ts_Free"; // Open Ts_Free
+					cout << "Retrive free As index from file: " << Ts_path << endl;
 					Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
 					if (!Ts_file)
 					{
-						cerr << "Error: open file: " << Ts_path << " failed." << endl;
+						cerr << "Error: open " << Ts_path << " failed..." << endl;
 					}
 					else
 					{
-						cout << "Open free As index file: " << Ts_path << endl;
 						Ts_file.read((char*)&free_Ts, sizeof(free_Ts));
 						Ts_file.seekg(0, Ts_file.beg);
 
 						cout << "Free As index: " << free_Ts.addr_s_N_first << endl;
+						As_free_i = free_Ts.addr_s_N_first; // free As index, Phi
 
-						As_path = "./EncData/As_" + to_string(free_Ts.addr_s_N_first) + ".enc"; // Open free As
+						As_path = "./EncData/As_" + to_string(As_free_i) + ".enc"; // Open free As
+						cout << "Open free As file: " << As_path << endl;
 						As_file.open(As_path, ios::in | ios::out | ios::binary);
 						if (!As_file)
 						{
-							cerr << "Error: Open file: " << As_path << " failed." << endl;
+							cerr << "Error: open file: " << As_path << " failed..." << endl;
 						}
 						else
 						{
-							cout << "Open free As file: " << As_path << endl;
 							As_file.read((char*)&free_As, sizeof(free_As));
 							As_file.seekg(0, As_file.beg);
-							cout << "The corresponding Ad index: " << free_As.r << endl;
-							if (free_As.addr_s_next == -1)
+							As_free_i_next = free_As.addr_s_next;
+							Ad_free_i = free_As.r; // the corresponding Ad, Phi*
+							
+							cout << "The corresponding Ad index: " << Ad_free_i << endl;
+
+							if (Ad_free_i == -1)
 								cout << "As already is full!" << endl;
 							else
-								cout << "Next free As index: " << free_As.addr_s_next << endl; // Phi_prev
-							
-							new_N_first_dual = free_As.r; // Phi*
-							new_N_first = free_Ts.addr_s_N_first; // Phi
-							Ad_buf.addr_s_prev_file = new_N_first; // prepare Ad_buf for update dual of As
-							Ad_buf.addr_d_prev_file = new_N_first_dual;
+								cout << "Next free As index: " << As_free_i_next << endl; // Phi_prev
 
-							free_Ts.addr_s_N_first = free_As.addr_s_next;
+							/* Update Ts_free table */
+							free_Ts.addr_s_N_first = As_free_i_next;
 							Ts_file.write((char*)&free_Ts, sizeof(free_Ts)); // update search table Ts for free
 							Ts_file.close();
-							
-							/* Update Ad */
+							cout << "**** Update Free Ts table to point to As_" << free_As.addr_s_next << " .enc ****" << endl;
+							/* Update Ts_free table */
+
 							Ts_path = "EncData/Ts_" + to_string(F_k1_w) +".enc"; // open Ts for a keywoord
 							Ts_file.open(Ts_path, ios::in | ios::out | ios::binary);
 							if (!Ts_file)
 							{
-								cerr << "Error: open file: " << Ts_path << " failed." << endl;
+								cerr << "Error: open file: " << Ts_path << " failed..." << endl;
 							}
 							else
 							{
-								cout << "Open As index file for some keyword: " << Ts_path << endl;
+								cout << "Open search table Ts file for some keyword: " << Ts_path << endl;
 								Ts_file.read((char*)&Ts, sizeof(Ts));
 								Ts_file.seekg(0, Ts_file.beg);
 								ptr1 = (char*)&Ts;
@@ -1123,11 +1131,21 @@ class DSSE
 								{
 									ptr1[i] = ptr1[i] ^ G_k2_w.c_str()[i];
 								}
-								cout << "Next As index for some keyword: " << Ts.addr_s_N_first << endl; // Alpha
-								cout << "Dual Ad index for some keyword: " << Ts.addr_d_N_first_dual << endl; // Alpha*
+								As_w = Ts.addr_s_N_first; // Alpha
+								Ad_w = Ts.addr_d_N_first_dual; // Alpha*
+								cout << "First As index for some keyword: " << As_w << endl; 
+								cout << "Dual Ad index for some keyword: " << Ad_w << endl;
 
-								Ad_path = "./EncData/Ad_" + to_string(Ts.addr_d_N_first_dual);
-								cout << "Open dual Ad file: " << path << endl;
+								/* Write data to free As */
+								token_As.addr_s_next = token_As.addr_s_next ^ As_w;
+								As_file.write((char*)&token_As, sizeof(token_As));
+								As_file.close();
+								cout << "**** Write new data to free As file: " << As_path << " ****" << endl;
+								/* Write data to free As */
+
+								/* Update the corrsponding Ad for some keyword */
+								Ad_path = "./EncData/Ad_" + to_string(Ad_w) + ".enc";
+								cout << "Open dual Ad file for some keyword: " << Ad_path << endl;
 								Ad_file.open(Ad_path, ios::in | ios::out | ios::binary);
 								if (!Ad_file)
 								{
@@ -1137,102 +1155,82 @@ class DSSE
 								{
 									Ad_file.read((char*)&Ad, sizeof(Ad));
 									Ad_file.seekg(0, Ad_file.beg);
-									ptr1 = (char*)&Ad;
-									ptr2 = (char*)&Ad_buf;
-									for (int i = 0; i < sizeof(Ad); i++) // for reserve H2
-									{
-										ptr1[i] = ptr1[i] ^ ptr2[i];
-									}
-									Ad_file.write((char*)&Ad, sizeof(Ad)); // update Ad[Alpha*]
+
+									Ad.addr_d_prev_file = Ad.addr_d_prev_file ^ -1 ^ Ad_free_i; // -1: for the first As, the original value is - 1
+									Ad.addr_s_prev_file = Ad.addr_s_prev_file ^ -1 ^ As_free_i;
+									
+									Ad_file.write((char*)&Ad, sizeof(Ad));
 									Ad_file.close();
+									cout << "**** Update the corrsponding Ad for some keyword: " << Ad_path << " ****" << endl;
 								}
+								/* Update the corrsponding Ad for some keyword */
 								
-								memset(&Ad_buf, 0, sizeof(Ad_buf));
-
-								As_path = "./EncData/As_" + to_string(free_As.addr_s_next) + ".enc";
-								next_As_file.open(As_path, ios::in | ios::binary);
-								if (!next_As_file)
-								{
-									cerr << "Error: open file: " << As_path << " failed." << endl;
-								}
-								else
-								{
-									next_As_file.read((char*)&next_As, sizeof(next_As));
-									next_As_file.close();
-									
-									if ((int)token_file.tellg() == length)
-										Ad_buf.addr_d_next = -1; // Phi*_prev
-									else
-										Ad_buf.addr_d_next = next_As.r; // Phi*_prev
-									
-									Ad_buf.addr_d_next_file = Ts.addr_d_N_first_dual;
-									Ad_buf.addr_s_file = Ts.addr_d_N_first_dual;
-									Ad_buf.addr_s_next_file = Ts.addr_s_N_first;
-
-									Ad_path = "./EncData/Ad_" + to_string(new_N_first_dual);
-									cout << "Open dual Ad file: " << path << endl;
-									Ad_file.open(Ad_path, ios::in | ios::out | ios::binary);
-									if (!Ad_file)
-									{
-										cerr << "Error: open file: " << Ad_path << " failed." << endl;
-									}
-									else
-									{
-										Ad_file.read((char*)&Ad, sizeof(Ad));
-										Ad_file.seekg(0, Ad_file.beg);
-										ptr1 = (char*)&Ad;
-										ptr2 = (char*)&Ad_buf;
-
-										for (int i = 0; i < sizeof(Ad); i++)
-										{
-											ptr1[i] = ptr1[i] ^ ptr2[i];
-											Ad_file.write((char*)&Ad, sizeof(Ad));
-											Ad_file.close();
-										}
-									}
-
-								}
-								/* Update Ad */
-
-								/* Update Td */
-								if ((int)token_file.tellg() == length)
-								{
-									Td.addr_d_D_first = new_N_first_dual;
-
-									ptr1 = (char*)&Td;
-									for (int i = 0; i < sizeof(Td); i++)
-									{
-										ptr1[i] = ptr1[i] ^ G_k2_f.c_str()[i];
-									}
-								}
-								/* Update Td */
-
-								ptr1 = (char*)&As;
-								ptr2 = (char*)&As_buf;
-								memset(ptr2, 0, sizeof(As_buf));
-								As_buf.addr_s_next = Ts.addr_s_N_first;
-								for (int i = 0; i < sizeof(As); i++) // for reverse H1
-								{
-									ptr1[i] = ptr1[i] ^ ptr2[i];
-								}
-								As_file.write(ptr1, sizeof(As));
-								As_file.close();
-
-								Ts.addr_s_N_first = new_N_first; // update the search table
-								Ts.addr_d_N_first_dual = new_N_first_dual;
-								
+								/* Update search table for some keyword */
+								Ts.addr_s_N_first = As_free_i;
+								Ts.addr_d_N_first_dual = Ad_free_i;
 								ptr1 = (char*)&Ts;
-								for (int i = 0; i < sizeof(Ts); i++) // re-encryption
+								for (int i = 0; i < sizeof(Ts); i++) // re-ecryption Ts
 								{
 									ptr1[i] = ptr1[i] ^ G_k2_w.c_str()[i];
 								}
 								Ts_file.write((char*)&Ts, sizeof(Ts));
 								Ts_file.close();
+								cout << "**** Update search table for some keyword: " << Ts_path << " ****" << endl;
+								/* Update search table for some keyword */
+
+								/* Update new Ad for new file */
+								Ad_path = "./EncData/Ad_" + to_string(Ad_free_i) + ".enc";
+								Ad_file.open(Ad_path, ios::in | ios::out | ios::binary);
+								if (!Ad_file)
+								{
+									cerr << "Error: open file: " << Ad_path << " failed...." << endl;
+								}
+								else
+								{
+									cout << "Open free Ad file: " << Ad_path << endl;
+
+									if ((int)token_file.tellg() == length)
+										token_Ad.addr_d_next = token_Ad.addr_d_next ^ - 1; // Phi*_prev
+									else
+									{
+										As_path = "./EncData/As_" + to_string(As_free_i_next) + ".enc";
+										As_file.open(As_path, ios::in | ios::binary);
+										if (!Ad_file)
+										{
+											cerr << "Error: open file: " << As_path << " failed...." << endl;
+										}
+										else
+										{
+											cout << "Open next free As file: " << As_path << "to find next Ad" << endl;
+											As_file.read((char*)&As, sizeof(As));
+											As_file.close();
+											token_Ad.addr_d_next = token_Ad.addr_d_next ^ As.r;
+										}
+									}
+									token_Ad.addr_d_prev_file = token_Ad.addr_d_prev_file ^ -1;
+									token_Ad.addr_d_next_file = token_Ad.addr_d_next_file ^ Ad_w;
+									token_Ad.addr_s_file = token_Ad.addr_s_file ^ As_free_i;
+									token_Ad.addr_s_prev_file = token_Ad.addr_s_prev_file ^ -1;
+									token_Ad.addr_s_next_file = token_Ad.addr_s_next_file ^ As_w;
+
+									Ad_file.write((char*)&token_Ad, sizeof(token_Ad));
+									Ad_file.close();
+									cout << "**** Write data to new Ad file: " << Ad_path << " ****" << endl;
+								}
+								/* Update new Ad for new file */
 							}
 						}
 					}
 				}
+				Td.addr_d_D_first = Ad_free_i;
+				ptr1 = (char*)&Td;
+				for (int i = 0; i < sizeof(Td); i++)
+				{
+					ptr1[i] = ptr1[i] ^ G_k2_f.c_str()[i];
+				}
+				Td_file.write((char*)&Td, sizeof(Td));
 				Td_file.close();
+				cout << "Let Td file: " << Td_path << " point to Ad_" << Ad_free_i << ".enc" << endl;
 				token_file.close();
 			}
 		}
