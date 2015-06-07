@@ -2,10 +2,17 @@
 
 #include <iostream>
 #include <cstdlib>
-#include <cstring>
 #include <random>
-#include <dirent.h>
 #include <fstream>
+#include <iomanip>
+#include <vector>
+#include <algorithm>
+#include <windows.h>
+#include <string>
+#include <dirent.h>
+
+#include <random>       // std::default_random_engine
+#include <chrono>       // std::chrono::system_clock
 
 #include <sha.h>
 #include <osrng.h>
@@ -15,21 +22,24 @@
 
 #pragma comment(lib, "cryptlib.lib")
 
-#define ARRAY_SIZE 6
-#define FREE_SIZE 2
-#define SEARCH_TABLE_SIZE 65536
-#define DELETE_TABLE_SIZE 65536
-#define FREE "\"free\""
+//#define ARRAY_SIZE 6 // equal to the number of file-keyword pairs
+//#define FREE_SIZE 2
+//#define SEARCH_TABLE_SIZE 65536 // equal to the number of keywords + 1
+//#define DELETE_TABLE_SIZE 65536 // equal to the number of files
+
+#define FREE "\"free\"" // used to identify the "free space" in search array
+
+#define FILE_NUMBER 517375
+#define KEYWPRD_NUMBER 1806218
+#define PAIR_NUMBER 8 //105808042
+
+#define KEY_LENGTH 16
 
 using namespace std;
 using namespace CryptoPP;
 
 inline void string_to_byte(byte *b_text, string s_text, int b_text_len);  // parse a string raw data to an array
 
-/*string sha256(string text)
-{
-	return text;
-}*/
 string sha256(string text)
 {
 	SHA256 hash;
@@ -53,17 +63,6 @@ string sha256(string text)
 	//cout << "Data: " << text << endl << "SHA-256 hash: " << encoded << endl;
 
 	return result;
-}
-
-inline string hex_encoder(string raw)
-{
-	string hex;
-	StringSource ss2(raw, true,
-		new HexEncoder(
-		new StringSink(hex)
-		) // HexEncoder
-		); // StringSource
-	return hex;
 }
 
 string HMAC_SHA_256(byte *user_key, int user_key_len, string plain)
@@ -159,22 +158,34 @@ string CMAC_AES_128(byte *user_key, int user_key_len, string plain) // user_key_
 	return mac;
 }
 
-int F(byte *user_key, int user_key_len, string keyword, int unit_bytes, int index) // hash function
+unsigned int F(byte *user_key, int user_key_len, string keyword, int unit_bytes, int index) // hash function
 {
 	string cmac = CMAC_AES_128(user_key, user_key_len, keyword);
 	byte temp[16];
 	string_to_byte(temp, cmac, 16);
 	unsigned short int *ptr_2byte = NULL;
+	unsigned int *ptr_4byte = NULL;
 	if (unit_bytes == 2)
 	{
 		ptr_2byte = (unsigned short int*)temp;
+		return ptr_2byte[index];
 	}
-	return ptr_2byte[index];
+	else if (unit_bytes == 4)
+	{
+		ptr_4byte = (unsigned int*)temp;
+		return ptr_4byte[index];
+	}
+	else
+	{
+		cerr << "Error: parameter 4" << endl;
+		return -1;
+	}
+	
 }
 
-struct search_array //As, for each keyword, 40 bytes
+struct search_array //As, for each keyword, 12 bytes, first 8 bytes encryption
 {
-	char id[32]; // the ID of the file, use sha256(file_name) as ID
+	int file_id; // file ID is a 32-bit integer
 	int addr_s_next; // the address of the next node in search array for a keyword
 	int r; // for free As node, this is pointer to free Ad node
 };
@@ -183,6 +194,7 @@ struct search_table // Ts, for each keyword, 8 bytes
 {
 	int addr_s_N_first; // the address of the first node in search array for a keyword
 	int addr_d_N_first_dual; // the address of the first node in deletion array whose fourth entry points to the first node in search array for a keyword
+	unsigned int keyword_hash;
 };
 
 struct del_array // Ad, for each file, 32 bytes
@@ -193,40 +205,15 @@ struct del_array // Ad, for each file, 32 bytes
 	int addr_s_file; // the address of the node in search array which is for keyword w that contain file f
 	int addr_s_prev_file; // the address of the node in search array which is for keyword w that contain previous file f_-1
 	int addr_s_next_file; // the address of the node in search array which is for keyword w that contain next file f_+1
-	int keyword_hash;
+	unsigned int keyword_hash;
 	int r_p; // r'
 };
 
 struct del_table // Td, for each file, 4 bytes
 {
 	int addr_d_D_first;
+	unsigned int file_hash;
 };
-
-/* auxiliary structure */
-struct index_keyword // the index of a keyword and files id
-{
-	string keyword;
-	string *id;
-	int number; // numbers of file for a keyword w
-
-	void build_id()
-	{
-		id = new string[this->number];
-	}
-
-	void del_id()
-	{
-		delete[] id;
-	}
-};
-
-struct index_file // the index of a file and keywords
-{
-	string id;
-	string keyqord[3];
-	int number; // numbers of keyword for a file f
-};
-/* auxiliary structure */
 
 /* auxiliary function */
 inline void string_to_byte(byte *b_text, string s_text, int b_text_len)
@@ -234,34 +221,25 @@ inline void string_to_byte(byte *b_text, string s_text, int b_text_len)
 	memcpy((char*)b_text, s_text.c_str(), b_text_len);
 }
 
-void random_location(int *location_ptr, int range, int number) // 產生一個大小為number的隨機數列，範圍從0到range-1，數字不會重複
+inline wstring s2ws(const std::string& s)
 {
-	if (number > range)
-	{
-		cout << "Error: number cannot greater than range" << endl;
-		return;
-	}
+	int len;
+	int slength = (int)s.length() + 1;
+	len = MultiByteToWideChar(CP_ACP, 0, s.c_str(), slength, 0, 0);
+	std::wstring r(len, L'\0');
+	MultiByteToWideChar(CP_ACP, 0, s.c_str(), slength, &r[0], len);
+	return r;
+}
 
-	int *used = new int[number];
-	memset(used, 0, number*sizeof(int));
-
-	int counter = 0;
-	while (1)
-	{
-		int temp = rand() % range;
-
-		if (used[temp] == 0)
-		{
-			cout << temp << endl;
-			used[temp] = 1;
-			location_ptr[counter] = temp;
-			counter++;
-		}
-		
-		if (counter == number)
-			break;
-	}
-	delete[] used;
+inline string hex_encoder(string raw)
+{
+	string hex;
+	StringSource ss2(raw, true,
+		new HexEncoder(
+		new StringSink(hex)
+		) // HexEncoder
+		); // StringSource
+	return hex;
 }
 /* auxiliary function */
 
@@ -270,274 +248,290 @@ class DSSE
 	public:
 		void client_keygen()
 		{
-			memset(k1, 0x00, sizeof(k1));
-			memset(k2, 0x01, sizeof(k2));
-			memset(k3, 0x02, sizeof(k3));
-			memset(k4, 0x03, sizeof(k4));
-		}
+			memset(k1, 0x01, sizeof(k1));
+			memset(k2, 0x02, sizeof(k2));
+			memset(k3, 0x03, sizeof(k3));
+			memset(k4, 0x04, sizeof(k4));
 
-		void client_index_build()
-		{
-			/* build index for keyword 
-			keyword_set[0].keyword = "w1";
-			keyword_set[1].keyword = "w2";
-			keyword_set[2].keyword = "w3";
-
-			keyword_set[0].id[0] = "f1";
-			keyword_set[0].id[1] = "f2";
-			keyword_set[0].id[2] = "f3";
-			keyword_set[0].number = 3;
-
-			keyword_set[1].id[0] = "f2";
-			keyword_set[1].number = 1;
-
-			keyword_set[2].id[0] = "f2";
-			keyword_set[2].id[1] = "f3";
-			keyword_set[2].number = 2;
-			 build index for keyword */
-
-			/* build index for keyword  */
-			DIR *dp;
-			fstream file_obj;
-
-			dp = opendir("./Index");
-			struct dirent *ep;
-
-			string path;
-			if (dp != NULL)
-			{
-				int keyword_number = 0, file_number = 0, start, end;
-				int length;
-				char *buf = NULL;
-
-				while (ep = readdir(dp)) // read the index file, the index file need to be UNIX format
-				{
-					//printf("%s\n", ep->d_name);
-					keyword_number++;
-				}
-				keyword_number = keyword_number - 2; // 扣掉當前目錄和上層目錄
-				cout << "We have " << keyword_number << " keywords" << endl;
-				keyword_set = new struct index_keyword[keyword_number];
-				rewinddir(dp);
-				readdir(dp);
-				readdir(dp);
-
-				int counter = 0;
-				while (ep = readdir(dp))
-				{
-					file_number = 0;
-					printf("%s\n", ep->d_name);
-					keyword_set[counter].keyword = ep->d_name; // write keyword to keyword_set
-					path.clear();
-					path = "./Index/" + path.assign(ep->d_name);
-					file_obj.open(path, ios::in | ios::binary);
-
-					if (!file_obj)
-					{
-						cerr << "Index file: " << ep->d_name << " open failed..." << endl << endl;
-						continue;
-					}
-
-					/* Calculate file size (bytes) */
-					file_obj.seekg(0, ios::end);
-					length = file_obj.tellg(); // the size of the file
-					file_obj.seekg(0, ios::beg);
-					cout << "Index file: " << ep->d_name << " is " << length << " bytes." << endl;
-					/* Calculate file size (bytes) */
-
-					buf = new char[length];
-					file_obj.read(buf, length);
-
-					/* Counte the number of file */
-					for (int i = 0; i < length; i++)
-					{
-						if (buf[i] == '\n')
-						{
-							file_number++;
-						}
-					}
-					cout << "File number: " << file_number << endl;
-					/* Counte the number of file */
-
-					keyword_set[counter].number = file_number; // write numbers of file include a keyword
-					keyword_set[counter].build_id(); // generate a space to store id
-
-					start = 0;
-					file_number = 0;
-					for (int i = 0; i < length; i++)
-					{
-						if (buf[i] == '\n')
-						{
-							end = i;
-							//cout << "DEBUG: start = " << start << endl;
-							//cout << "DEBUG: end = " << end << endl;
-							keyword_set[counter].id[file_number].assign(&buf[start], end - start); // write file id
-							start = end + 1;
-							file_number++;
-						}
-					}
-					file_obj.close();
-					delete[] buf;
-					counter++;
-				}
-			}
-			/* build index for keyword  */
-
-
-			/* build index for file */
-			file_set[0].id = "f1";
-			file_set[1].id = "f2";
-			file_set[2].id = "f3";
-
-			file_set[0].keyqord[0] = "w1";
-			file_set[0].number = 1;
-
-			file_set[1].keyqord[0] = "w1";
-			file_set[1].keyqord[1] = "w2";
-			file_set[1].keyqord[2] = "w3";
-			file_set[1].number = 3;
-
-			file_set[2].keyqord[0] = "w1";
-			file_set[2].keyqord[1] = "w3";
-			file_set[2].number = 2;
-			/* build index for file */
+			log_file.open(log_path, ios::out);
+			if (!log_file)
+				cerr << "Error: create log file " << log_path << " failed..." << endl;
 		}
 		
-		void client_enc()
+		void client_enc(int pair_number)
 		{
+			/* Mapping Index File to Memory */
+			string index_path = "./Client/Index/Invert_Index.idx";
+			string list_path = "./Client/List/Forward_Index.list";
+			wstring w_index_path = s2ws(index_path);
+			wstring w_list_path = s2ws(list_path);
+
+			// 打開文件 for invert index
+			HANDLE index_fileH = CreateFile(w_index_path.c_str(),
+				GENERIC_READ | GENERIC_WRITE,
+				FILE_SHARE_READ,
+				NULL,
+				OPEN_EXISTING,
+				FILE_ATTRIBUTE_NORMAL,
+				NULL);
+			if (index_fileH == INVALID_HANDLE_VALUE)
+			{
+				cerr << "Error: CreateFile for " << index_path << endl;
+				system("PAUSE");
+				return;
+			}
+			int index_size = GetFileSize(index_fileH, NULL);
+
+			// 創建文件映射內核對象
+			HANDLE index_mapFileH = CreateFileMapping(index_fileH,
+				NULL,
+				PAGE_READWRITE,
+				0,
+				0,
+				NULL);
+			if (index_mapFileH == NULL)
+			{
+				cerr << "Error: CreateFileMapping for " << index_path << endl;
+				system("PAUSE");
+				return;
+			}
+
+			// 將文件數據映射到進程地址空間
+			char *index_mapH = (char *)MapViewOfFile(index_mapFileH,
+				FILE_MAP_ALL_ACCESS,
+				0,
+				0,
+				0);
+			if (index_mapH == NULL)
+			{
+				cerr << "Error: MapViewOfFile for" << index_path << endl;
+				system("PAUSE");
+				return;
+			}
+			
+			// 設定存取指標
+			char *index_ptr = index_mapH;
+			/*for (int i = 0; i < index_size; i++)
+			{
+				cout << index_ptr[i];
+			}*/
+			
+			// 打開文件 for list index
+			HANDLE list_fileH = CreateFile(w_list_path.c_str(),
+				GENERIC_READ | GENERIC_WRITE,
+				FILE_SHARE_READ,
+				NULL,
+				OPEN_EXISTING,
+				FILE_ATTRIBUTE_NORMAL,
+				NULL);
+			if (list_fileH == INVALID_HANDLE_VALUE)
+			{
+				cerr << "Error: CreateFile for " << list_path << endl;
+				system("PAUSE");
+				return;
+			}
+			int list_size = GetFileSize(list_fileH, NULL);
+
+			// 創建文件映射內核對象
+			HANDLE list_mapFileH = CreateFileMapping(list_fileH,
+				NULL,
+				PAGE_READWRITE,
+				0,
+				0,
+				NULL);
+			if (list_mapFileH == NULL)
+			{
+				cerr << "Error: CreateFileMapping for " << list_path << endl;
+				system("PAUSE");
+				return;
+			}
+
+			// 將文件數據映射到進程地址空間
+			char *list_mapH = (char *)MapViewOfFile(list_mapFileH,
+				FILE_MAP_ALL_ACCESS,
+				0,
+				0,
+				0);
+			if (list_mapH == NULL)
+			{
+				cerr << "Error: MapViewOfFile for" << list_path << endl;
+				system("PAUSE");
+				return;
+			}
+
+			// 設定存取指標
+			char *list_ptr = list_mapH;
+			/*for (int i = 0; i < list_size; i++)
+			{
+				cout << list_ptr[i];
+			}*/
+			/* Mapping Index File to Memory */
+			
 			/* For 32-bit random number r and r_p */
 			random_device rd;
 			default_random_engine eng{ rd() };
 			uniform_int_distribution<> dist;
 			/* For 32-bit random number r and r_p */
 
-			/* Initialization */
-			memset(As, -1, sizeof(As));
-			memset(Ad, -1, sizeof(Ad));
-			memset(Ts, -1, sizeof(Ts));
-			memset(Td, -1, sizeof(Td));
-			/* Initialization */
+			int As_size = pair_number, Ad_size = pair_number, Ts_size = KEYWPRD_NUMBER + 1, Td_size = FILE_NUMBER;
 
-			int keyeord_number = 3;
-			int file_number = 3;
-
-			int node_number = 0;
-			for (int i = 0; i < keyeord_number; i++)
-			{
-				node_number = node_number + keyword_set[i].number;
-			}
-
-			string file_id_string; // to store sha256(file_name) temporarily
-
-			/* Generate a sequence to store node N at random location in As */
-			int *As_index = new int[ARRAY_SIZE + FREE_SIZE];
-			random_location(As_index, ARRAY_SIZE + FREE_SIZE, ARRAY_SIZE + FREE_SIZE);
-			/* Generate a sequence to store node N at random location in As */
+			struct search_array *As; // equal to the number of file-keyword pairs
+			struct del_array *Ad; // equal to the number of file-keyword pairs
+			struct search_table *Ts; // equal to the number of keywords + 1
+			struct del_table *Td; // equal to the number of files
+		
+			vector <int> As_index;
+			vector <int> Ad_index;
+			As_index.reserve(As_size);
+			Ad_index.reserve(Ad_size);
+			cout << "Generate random number for index As, Ad" << endl;
+			cout << "	Start push back" << endl;
 			
-			/* Build As */
-			int counter = 0;
-			for (int i = 0; i < keyeord_number; i++) // for keyword, w1, w2, w3
-			{
-				Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)].addr_s_N_first = As_index[counter]; // build first element of Ts
-				cout << "DEBUG: F(" << keyword_set[i].keyword << ") = " << F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0) << endl;
-				for (int j = 0; j < keyword_set[i].number; j++) // for file include the keyword
-				{
-					string_to_byte((byte*)As[As_index[counter]].id, sha256(keyword_set[i].id[j]), 32); // store ID to As
-					//As[As_index[counter]].id = keyword_set[i].id[j];
-					As[As_index[counter]].r = dist(eng); // generate r
+#pragma loop(hint_parallel(4)) // Auto-Parallelizer 
 
-					if (j == keyword_set[i].number - 1) // the last node for a keyword
-					{
-						As[As_index[counter]].addr_s_next = -1; // let array_index < 0 as NULL
-					}
-					else
-					{
-						As[As_index[counter]].addr_s_next = As_index[counter + 1];
-					}
-					counter++;
-				}
+			for (int i = 0; i < As_size; i++)
+			{
+				As_index.push_back(i);
+				Ad_index.push_back(i);
 			}
-			cout << endl;
-			/* Build As */
+			cout << "	Push back complete" << endl;
 
-			/* Generate a sequence to store node N at random location in Ad */
-			int *Ad_index = new int[ARRAY_SIZE + FREE_SIZE];
-			random_location(Ad_index, ARRAY_SIZE + FREE_SIZE, ARRAY_SIZE + FREE_SIZE);
-			/* Generate a sequence to store node N at random location in Ad */
+			cout << "	Start random shuffle" << endl;
+			random_shuffle(As_index.begin(), As_index.end());
+			random_shuffle(Ad_index.begin(), Ad_index.end());
+			cout << "	Random shuffle complete" << endl;
+			cout << "Random number gemerate complete" << endl;
 			
-			int keyword_hash;
-			int file_hash;
-			int temp_As_index;
-			int temp_Ad_index;
-			int temp_Ad_index2;
+			As = new struct search_array[As_size];
+			Ad = new struct del_array[Ad_size];
+			Ts = new struct search_table[Ts_size];
+			Td = new struct del_table[Td_size];
 
-			counter = 0;
-			for (int i = 0; i < file_number; i++) // for file id, f1, f2, f3
+			/* Initialization */
+			memset(As, -1, As_size * sizeof(search_array));
+			memset(Ad, -1, Ad_size * sizeof(del_array));
+			memset(Ts, -1, Ts_size * sizeof(search_table));
+			memset(Td, -1, Td_size * sizeof(del_table));
+			/* Initialization */
+
+			/* Build As */
+			string keyword, file_ID, buf;
+			int buf_head = 0, w_end, id_head, id_end, buf_size;
+			int As_counter = 0, Ts_counter = 0;
+
+			for (int i = 0; i < index_size; i++)
 			{
-				file_hash = F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0);
-				cout << "DEBUG: F(" << file_set[i].id << ") = " << file_hash << endl;
-				Td[file_hash].addr_d_D_first = Ad_index[counter];
-				
-				for (int j = 0; j < file_set[i].number; j++) // for keyword in each file
+				//cout << buf[i];
+				if (index_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					keyword_hash = F(k1, sizeof(k1), file_set[i].keyqord[j], 2, 0);
-					Ad[Ad_index[counter]].r_p = dist(eng);
-
-					/* Addr_d(D_i+1) */
-					if (j == file_set[i].number - 1) // the last node for a file
+					buf.assign(index_ptr + buf_head, i - buf_head);
+					//cout << buffer << endl;
+					buf_size = buf.size();
+					for (int j = 0; j < buf_size; j++)
 					{
-						Ad[Ad_index[counter]].addr_d_next = -1;
-					}
-					else
-					{
-						Ad[Ad_index[counter]].addr_d_next = Ad_index[counter + 1];
-					}
-					/* Addr_d(D_i+1) */
-
-					/* F(w) */
-					Ad[Ad_index[counter]].keyword_hash = keyword_hash;
-					/* F(w) */
-
-					/* addr_s(N) */
-					temp_As_index = Ts[keyword_hash].addr_s_N_first;
-					while (1)
-					{
-						file_id_string = sha256(file_set[i].id);
-						if (strncmp(As[temp_As_index].id, file_id_string.c_str(), 32) == 0)
-						//if (As[temp_As_index].id == file_set[i].id)
+						if (buf[j] == ':') // read keyword from invert index
 						{
-							Ad[Ad_index[counter]].addr_s_file = temp_As_index;
+							w_end = j;
+							keyword.assign(buf.c_str(), w_end);
+							Ts[Ts_counter].keyword_hash = F(k1, sizeof(k1), keyword, 4, 0); // record the keyword hash for store later
+							Ts[Ts_counter].addr_s_N_first = As_index[As_counter]; // build first element of Ts
+							Ts_counter++;
+							//cout << Ts_counter << endl; // show the Ts_counter
+							//cout << keyword << endl; // show the keyword
+							id_head = w_end + 1;
 							break;
 						}
-						else
+					}
+
+					for (int j = id_head; j < buf_size; j++) // read file ID from invert index
+					{
+						if (buf[j] == 32)
 						{
-							temp_As_index = As[temp_As_index].addr_s_next;
+							id_end = j;
+							file_ID.assign(&buf[id_head], id_end - id_head);
+							id_head = id_end + 1;
+							//cout << file_ID << endl; //show the ID
+							
+							//cout << "As_index[counter] = " << As_index[counter] << endl;
+							As[As_index[As_counter]].file_id = atoi(file_ID.c_str()); // store ID to As
+							As[As_index[As_counter]].r = dist(eng); // generate r
+							As[As_index[As_counter]].addr_s_next = As_index[As_counter + 1]; // link to next node for the same keyword
+							As_counter++;
 						}
 					}
-					/* addr_s(N) */
+					As[As_index[As_counter-1]].addr_s_next = -1; // let array_index < 0 as NULL
 
-					/* addr_s(N+1) */
-					Ad[Ad_index[counter]].addr_s_next_file = As[Ad[Ad_index[counter]].addr_s_file].addr_s_next;
-					/* addr_s(N+1) */
+					buf_head = i + 1;
+				}
+			}
+			/* Build As */
 
-					/* addr_s(N-1) */
-					if (strncmp(As[Ts[keyword_hash].addr_s_N_first].id, file_id_string.c_str(), 32) == 0) // if we can find it Ts, there is no previous node
-					//if (As[Ts[keyword_hash].addr_s_N_first].id == file_set[i].id)
+			/* Build Ad Part */
+			keyword.clear();
+			file_ID.clear();
+			buf.clear();
+			buf_head = 0, id_end = 0;
+			int keyword_head, keyword_end;
+			int Ad_counter = 0, Td_counter = 0;
+
+			unsigned int keyword_hash;
+			int temp_As_index;
+			
+			for (int i = 0; i < list_size; i++)
+			{
+				//cout << list_ptr[i];
+				if (list_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
+				{
+					buf.assign(list_ptr + buf_head, i - buf_head);
+					//cout << buf << endl;
+					buf_size = buf.size();
+
+					for (int j = 0; j < buf_size; j++)
 					{
-						Ad[Ad_index[counter]].addr_s_prev_file = -1;
-					}
-					else
-					{
-						if (i - 1 >= 0)
+						if (buf[j] == ':') // read file ID from forward index
 						{
-							temp_As_index = Ts[keyword_hash].addr_s_N_first;
+							id_end = j;
+							file_ID.assign(buf.c_str(), id_end);
+							Td[Td_counter].file_hash = F(k1, sizeof(k1), file_ID, 4, 0); // record the file hash for store later
+							Td[Td_counter].addr_d_D_first = Ad_index[Ad_counter]; // build Td
+							Td_counter++;
+							//cout << Ts_counter << endl; // show the Ts_counter
+							//cout << file_ID << endl; // show the file ID
+							keyword_head = id_end + 1;
+							break;
+						}
+					}
+
+					for (int j = keyword_head; j < buf_size; j++) // read keyword from forward index
+					{
+						if (buf[j] == 32)
+						{
+							keyword_end = j;
+							keyword.assign(&buf[keyword_head], keyword_end - keyword_head);
+							keyword_head = keyword_end + 1;
+							//cout << keyword << endl; //show the keyword
+
+							keyword_hash = F(k1, sizeof(k1), keyword, 4, 0);
+							Ad[Ad_index[Ad_counter]].keyword_hash = keyword_hash; // F(w)
+							Ad[Ad_index[Ad_counter]].r_p = dist(eng); // r'
+							Ad[Ad_index[Ad_counter]].addr_d_next = Ad_index[Ad_counter + 1]; // link to next node for the same ID
+
+							/* addr_s(N) */
+							for (int k = 0; k < Ts_counter; k++)
+							{
+								if (keyword_hash == Ts[k].keyword_hash)
+								{
+									temp_As_index = Ts[k].addr_s_N_first;
+									//cout << "temp_As_index = " << temp_As_index << endl;
+									break;
+								}
+							}
 							while (1)
 							{
-								file_id_string = sha256(file_set[i - 1].id);
-								if (strncmp(As[temp_As_index].id, file_id_string.c_str(), 32) == 0)
-								//if (As[temp_As_index].id == file_set[i - 1].id)
+								if (As[temp_As_index].file_id == atoi(file_ID.c_str()))
 								{
-									Ad[Ad_index[counter]].addr_s_prev_file = temp_As_index;
+									Ad[Ad_index[Ad_counter]].addr_s_file = temp_As_index;
+									//cout << "temp_As_index = " << temp_As_index << endl;
 									break;
 								}
 								else
@@ -545,368 +539,689 @@ class DSSE
 									temp_As_index = As[temp_As_index].addr_s_next;
 								}
 							}
+							/* addr_s(N) */
+
+							Ad[Ad_index[Ad_counter]].addr_s_next_file = As[Ad[Ad_index[Ad_counter]].addr_s_file].addr_s_next; // addr_s(N+1)
+
+							
+							/* addr_s(N-1) */
+							for (int k = 0; k < Ts_counter; k++)
+							{
+								if (keyword_hash == Ts[k].keyword_hash)
+								{
+									temp_As_index = Ts[k].addr_s_N_first;
+									//cout << "temp_As_index = " << temp_As_index << endl;
+									break;
+								}
+							}
+							if (As[temp_As_index].file_id == atoi(file_ID.c_str())) // if we can find it Ts, there is no previous node
+							{
+								Ad[Ad_index[Ad_counter]].addr_s_prev_file = -1;
+							}
+							else
+							{
+								while (1)
+								{
+									if (As[temp_As_index].addr_s_next == Ad[Ad_index[Ad_counter]].addr_s_file)
+									{
+										Ad[Ad_index[Ad_counter]].addr_s_prev_file = temp_As_index;
+										break;
+									}
+									else
+									{
+										temp_As_index = As[temp_As_index].addr_s_next;
+									}
+								}
+							}
+							/* addr_s(N-1) */
+							Ad_counter++;
+						}
+					}
+					Ad[Ad_index[Ad_counter - 1]].addr_d_next = -1; // let array_index < 0 as NULL
+					buf_head = i + 1;
+				}
+			}
+			/* Build Ad Part */
+
+			/* Build Second Element of Ts */
+			buf_head = 0;
+			unsigned int file_hash;
+			int temp_Ad_index, temp_Td_index;;
+			for (int i = 0; i < index_size; i++)
+			{
+				//cout << buf[i];
+				if (index_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
+				{
+					buf.assign(index_ptr + buf_head, i - buf_head);
+					//cout << buffer << endl;
+					buf_size = buf.size();
+					for (int j = 0; j < buf_size; j++)
+					{
+						if (buf[j] == ':') // read keyword from invert index
+						{
+							w_end = j;
+							keyword.assign(buf.c_str(), w_end);
+							//cout << keyword << endl; // show the keyword
+							break;
+						}
+					}
+					buf_head = i + 1;
+
+					keyword_hash = F(k1, sizeof(k1), keyword, 4, 0);
+
+					for (int k = 0; k < Ts_counter; k++)
+					{
+						if (keyword_hash == Ts[k].keyword_hash)
+						{
+							temp_As_index = Ts[k].addr_s_N_first;
+							temp_Td_index = k;
+							//cout << "temp_As_index = " << temp_As_index << endl;
+							break;
+						}
+					}
+					file_ID = to_string(As[temp_As_index].file_id);
+					file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+
+					for (int k = 0; k < Td_counter; k++)
+					{
+						if (file_hash == Td[k].file_hash)
+						{
+							temp_Ad_index = Td[k].addr_d_D_first;
+							break;
+						}
+					}
+					while (1)
+					{
+						if (Ad[temp_Ad_index].addr_s_file == temp_As_index)
+						{
+							Ts[temp_Td_index].addr_d_N_first_dual = temp_Ad_index;
+							break;
 						}
 						else
 						{
-							Ad[Ad_index[counter]].addr_s_prev_file = -1;
+							temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
 						}
 					}
-					/* addr_s(N-1) */
-					counter++;
 				}
 			}
-			cout << endl;			
+			/* Build Second Element of Ts */
 
-			/* build second element of Ts */
-			
-			for (int i = 0; i < keyeord_number; i++) // for each keyword
+			/* Build addr_d(N+1) */
+			buf_head = 0;
+			int temp_Ad_index2;
+			for (int i = 0; i < list_size; i++)
 			{
-				keyword_hash = F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0);
-				temp_As_index = Ts[keyword_hash].addr_s_N_first;
-				file_id_string.clear();
-				file_id_string.assign(As[temp_As_index].id, 32);
-				temp_Ad_index = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
-				while (1)
+				//cout << list_ptr[i];
+				if (list_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					if (Ad[temp_Ad_index].addr_s_file == temp_As_index)
-					{
-						Ts[keyword_hash].addr_d_N_first_dual = temp_Ad_index;
-						break;
-					}
-					else
-					{
-						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
-					}
-				}
-			}
-			/* build second element of Ts */
+					buf.assign(list_ptr + buf_head, i - buf_head);
+					//cout << buf << endl;
+					buf_size = buf.size();
 
-			/* build addr_d(N+1) */
-			for (int i = 0; i < file_number; i++)
-			{
-				file_id_string = sha256(file_set[i].id);
-				file_hash = F(k1, sizeof(k1), file_id_string, 2, 0);
-				temp_Ad_index = Td[file_hash].addr_d_D_first;
-				while (1)
-				{
-					if (Ad[temp_Ad_index].addr_s_next_file != -1)
+					for (int j = 0; j < buf_size; j++)
 					{
-						temp_As_index = Ad[temp_Ad_index].addr_s_next_file;
-						file_id_string.clear();
-						file_id_string.assign(As[temp_As_index].id, 32);
-						temp_Ad_index2 = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
-						while (1)
+						if (buf[j] == ':') // read file ID from forward index
 						{
-							if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_next_file)
-							{
-								Ad[temp_Ad_index].addr_d_next_file = temp_Ad_index2;
-								break;
-							}
-							else
-							{
-								temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
-							}
+							id_end = j;
+							file_ID.assign(buf.c_str(), id_end);
+							cout << file_ID << endl; // show the file ID
+							break;
 						}
 					}
-					else
-					{
-						Ad[temp_Ad_index].addr_d_next_file = -1;
-					}
+					buf_head = i + 1;
 
-					if (Ad[temp_Ad_index].addr_d_next == -1)
-					{
-						break;
-					}
-					else
-					{
-						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
-					}
-				}
-			}
-			/* build addr_d(N+1) */
+					file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
 
-			/* build addr_d(N-1) */
-			for (int i = 0; i < file_number; i++)
-			{
-				file_id_string = sha256(file_set[i].id);
-				file_hash = F(k1, sizeof(k1), file_id_string, 2, 0);
-				temp_Ad_index = Td[file_hash].addr_d_D_first;
-				while (1)
-				{
-					if (Ad[temp_Ad_index].addr_s_prev_file != -1)
+					for (int k = 0; k < Td_counter; k++)
 					{
-						temp_As_index = Ad[temp_Ad_index].addr_s_prev_file;
-						file_id_string.clear();
-						file_id_string.assign(As[temp_As_index].id, 32);
-						temp_Ad_index2 = Td[F(k1, sizeof(k1), file_id_string, 2, 0)].addr_d_D_first;
-						while (1)
+						if (file_hash == Td[k].file_hash)
 						{
-							if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_prev_file)
-							{
-								Ad[temp_Ad_index].addr_d_prev_file = temp_Ad_index2;
-								break;
-							}
-							else
-							{
-								temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
-							}
+							temp_Ad_index = Td[k].addr_d_D_first;
+							break;
 						}
 					}
-					else
-					{
-						Ad[temp_Ad_index].addr_d_prev_file = -1;
-					}
 
-					if (Ad[temp_Ad_index].addr_d_next == -1)
+					while (1)
 					{
-						break;
-					}
-					else
-					{
-						temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+						if (Ad[temp_Ad_index].addr_s_next_file != -1)
+						{
+							temp_As_index = Ad[temp_Ad_index].addr_s_next_file;
+							file_ID = to_string(As[temp_As_index].file_id);
+							file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+							for (int k = 0; k < Td_counter; k++)
+							{
+								if (file_hash == Td[k].file_hash)
+								{
+									temp_Ad_index2 = Td[k].addr_d_D_first;
+									break;
+								}
+							}
+							while (1)
+							{
+								if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_next_file)
+								{
+									Ad[temp_Ad_index].addr_d_next_file = temp_Ad_index2;
+									break;
+								}
+								else
+								{
+									temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
+								}
+							}
+						}
+						else
+						{
+							Ad[temp_Ad_index].addr_d_next_file = -1;
+						}
+
+						if (Ad[temp_Ad_index].addr_d_next == -1)
+						{
+							break;
+						}
+						else
+						{
+							temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+						}
 					}
 				}
 			}
-			/* build addr_d(N-1) */
+			/* Build addr_d(N+1) */
+
+			/* Build addr_d(N-1) */
+			buf_head = 0;
+			for (int i = 0; i < list_size; i++)
+			{
+				//cout << list_ptr[i];
+				if (list_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
+				{
+					buf.assign(list_ptr + buf_head, i - buf_head);
+					//cout << buf << endl;
+					buf_size = buf.size();
+
+					for (int j = 0; j < buf_size; j++)
+					{
+						if (buf[j] == ':') // read file ID from forward index
+						{
+							id_end = j;
+							file_ID.assign(buf.c_str(), id_end);
+							//cout << file_ID << endl; // show the file ID
+							break;
+						}
+					}
+					buf_head = i + 1;
+
+					file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+
+					for (int k = 0; k < Td_counter; k++)
+					{
+						if (file_hash == Td[k].file_hash)
+						{
+							temp_Ad_index = Td[k].addr_d_D_first;
+							break;
+						}
+					}
+
+					while (1)
+					{
+						if (Ad[temp_Ad_index].addr_s_prev_file != -1)
+						{
+							temp_As_index = Ad[temp_Ad_index].addr_s_prev_file;
+							file_ID = to_string(As[temp_As_index].file_id);
+							file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+							for (int k = 0; k < Td_counter; k++)
+							{
+								if (file_hash == Td[k].file_hash)
+								{
+									temp_Ad_index2 = Td[k].addr_d_D_first;
+									break;
+								}
+							}
+							while (1)
+							{
+								if (Ad[temp_Ad_index2].addr_s_file == Ad[temp_Ad_index].addr_s_prev_file)
+								{
+									Ad[temp_Ad_index].addr_d_prev_file = temp_Ad_index2;
+									break;
+								}
+								else
+								{
+									temp_Ad_index2 = Ad[temp_Ad_index2].addr_d_next;
+								}
+							}
+						}
+						else
+						{
+							Ad[temp_Ad_index].addr_d_prev_file = -1;
+						}
+
+						if (Ad[temp_Ad_index].addr_d_next == -1)
+						{
+							break;
+						}
+						else
+						{
+							temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+						}
+					}
+				}
+			}
+			/* Build addr_d(N-1) */
 			cout << "Search index build complete" << endl;
-			
-			/* For free As */
-			cout << "DEBUG: F(" << FREE << ") = " << F(k1, sizeof(k1), FREE, 2, 0) << endl;
-			Ts[F(k1, sizeof(k1), FREE, 2, 0)].addr_s_N_first = As_index[ARRAY_SIZE + FREE_SIZE - 1];
-			for (int i = ARRAY_SIZE + FREE_SIZE - 1; i >= ARRAY_SIZE; i--)
+
+			/*
+			for (int i = 0; i < As_counter; i++) // show the state in As[]
 			{
-				memset(As[As_index[i]].id, -1, 32);
-				//As[As_index[i]].id = "-1";
-				
-				if (i == ARRAY_SIZE)
+				cout << "As[" << As_index[i] << "].file_id     = " << As[As_index[i]].file_id << endl;
+				cout << "As[" << As_index[i] << "].addr_s_next = " << As[As_index[i]].addr_s_next << endl;
+				cout << "As[" << As_index[i] << "].r           = " << As[As_index[i]].r << endl;
+				cout << endl;
+			}
+
+			for (int i = 0; i < Ad_counter; i++) // show the state in Ad[]
+			{
+				cout << "Ad[" << Ad_index[i] << "].addr_d_next      = " << Ad[Ad_index[i]].addr_d_next << endl;
+				cout << "Ad[" << Ad_index[i] << "].addr_d_prev_file = " << Ad[Ad_index[i]].addr_d_prev_file << endl;
+				cout << "Ad[" << Ad_index[i] << "].addr_d_next_file = " << Ad[Ad_index[i]].addr_d_next_file << endl;
+				cout << "Ad[" << Ad_index[i] << "].addr_s_file      = " << Ad[Ad_index[i]].addr_s_file << endl;
+				cout << "Ad[" << Ad_index[i] << "].addr_s_prev_file = " << Ad[Ad_index[i]].addr_s_prev_file << endl;
+				cout << "Ad[" << Ad_index[i] << "].addr_s_next_file = " << Ad[Ad_index[i]].addr_s_next_file << endl;
+				cout << "Ad[" << Ad_index[i] << "].keyword_hash     = " << Ad[Ad_index[i]].keyword_hash << endl;
+				cout << "Ad[" << Ad_index[i] << "].r_p = " << Ad[Ad_index[i]].r_p << endl;
+				cout << endl;
+			}
+
+			for (int i = 0; i < Ts_counter; i++) // show the state in Ts[]
+			{
+				cout << "Ts[" << i << "].keyword_hash   = " << Ts[i].keyword_hash << endl;
+				cout << "Ts[" << i << "].addr_s_N_first = " << Ts[i].addr_s_N_first << endl;
+				cout << endl;
+			}
+
+			for (int i = 0; i < Td_counter; i++) // show the state in Td[]
+			{
+				cout << "Td[" << i << "].file_hash      = " << Td[i].file_hash << endl;
+				cout << "Td[" << i << "].addr_d_D_first = " << Td[i].addr_d_D_first << endl;
+				cout << endl;
+			}
+			*/
+
+			/* For free As and Ad */
+			string free_str = FREE;
+			Ts[Ts_counter].keyword_hash = F(k1, sizeof(k1), free_str, 4, 0);
+			Ts[Ts_counter].addr_s_N_first = As_index[As_size - 1];
+			cout << "Number of free array: " << As_size - As_counter << endl;
+			for (int i = As_size - 1; i >= As_counter; i--)
+			{
+				As[As_index[i]].file_id = -1;
+
+				if (i == As_counter)
 					As[As_index[i]].addr_s_next = -1;
 				else
 					As[As_index[i]].addr_s_next = As_index[i - 1];
-					
+
 				As[As_index[i]].r = Ad_index[i];
+
+				Ad[Ad_index[i]].addr_d_next = dist(eng);
+				Ad[Ad_index[i]].addr_d_next_file = dist(eng);
+				Ad[Ad_index[i]].addr_d_prev_file = dist(eng);
+				Ad[Ad_index[i]].addr_s_file = dist(eng);
+				Ad[Ad_index[i]].addr_s_next_file = dist(eng);
+				Ad[Ad_index[i]].addr_s_prev_file = dist(eng);
+				Ad[Ad_index[i]].keyword_hash = dist(eng);
+				Ad[Ad_index[i]].r_p = dist(eng);
 			}
-			/* For free As */
+			/* For free As and Ad */
 			cout << "Free index build complete" << endl;
-
-			/* Write random string to remaining As and Ad */
-			for (int i = counter; i < ARRAY_SIZE; i++)
-			{
-				As[As_index[counter]].addr_s_next = dist(eng);
-				As[As_index[counter]].r = dist(eng);
-				for (int j = 0; j < 8; j++)
-				{
-					*((int*)As[As_index[counter]].id + j) = dist(eng); // write 32 bytes random string to As.id[]
-				}
-
-				Ad[Ad_index[counter]].addr_d_next = dist(eng);
-				Ad[Ad_index[counter]].addr_d_next_file = dist(eng);
-				Ad[Ad_index[counter]].addr_d_prev_file = dist(eng);
-				Ad[Ad_index[counter]].addr_s_file = dist(eng);
-				Ad[Ad_index[counter]].addr_s_next_file = dist(eng);
-				Ad[Ad_index[counter]].addr_s_prev_file = dist(eng);
-				Ad[Ad_index[counter]].keyword_hash = dist(eng);
-				Ad[Ad_index[counter]].r_p = dist(eng);
-			}
 			cout << "Random data write complete" << endl;
-			/* Write random string to remaining As and Ad */
-			
+
 			/* Encryption As */
+			cout << "Encryption As..." << endl;
 			char *temp_ptr;
 			string Kw, H1;
-			for (int i = 0; i < keyeord_number; i++)
+			buf_head = 0;
+			for (int i = 0; i < index_size; i++)
 			{
-				Kw = CMAC_AES_128(k3, sizeof(k3), keyword_set[i].keyword); // fora keyword, generate a key for HMAC_SHA_256
-				temp_As_index = Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)].addr_s_N_first;
-				while (temp_As_index != -1)
+				//cout << buf[i];
+				if (index_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					H1 = HMAC_SHA_256((byte*)Kw.c_str(), Kw.size(), to_string(As[temp_As_index].r)); // generate a 256-bit key
-					H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
-					temp_ptr = (char*)&As[temp_As_index];
-					temp_As_index = As[temp_As_index].addr_s_next;
-					for (int j = 0; j < 36; j++)
+					buf.assign(index_ptr + buf_head, i - buf_head);
+					//cout << buffer << endl;
+					buf_size = buf.size();
+					for (int j = 0; j < buf_size; j++)
 					{
-						temp_ptr[j] = temp_ptr[j] ^ H1.c_str()[j];
+						if (buf[j] == ':') // read keyword from invert index
+						{
+							w_end = j;
+							keyword.assign(buf.c_str(), w_end);
+							//cout << keyword << endl; // show the keyword
+							Kw = CMAC_AES_128(k3, sizeof(k3), keyword); // fora keyword, generate a key for HMAC_SHA_256
+							keyword_hash = F(k1, sizeof(k1), keyword, 4, 0);
+							for (int k = 0; k < Ts_counter; k++)
+							{
+								if (keyword_hash == Ts[k].keyword_hash)
+								{
+									temp_As_index = Ts[k].addr_s_N_first;
+									//cout << "temp_As_index = " << temp_As_index << endl;
+									break;
+								}
+							}
+							while (temp_As_index != -1)
+							{
+								H1 = HMAC_SHA_256((byte*)Kw.c_str(), Kw.size(), to_string(As[temp_As_index].r)); // generate a 256-bit key
+								temp_ptr = (char*)&As[temp_As_index];
+								temp_As_index = As[temp_As_index].addr_s_next;
+								for (int j = 0; j < 8; j++)
+								{
+									temp_ptr[j] = temp_ptr[j] ^ H1.c_str()[j];
+								}
+							}
+							break;
+						}
 					}
+					buf_head = i + 1;
 				}
 			}
 			/* Encryption As */
 
 			/* Encryption Ad */
+			cout << "Encryption Ad..." << endl;
 			string Kf, H2;
-			for (int i = 0; i < file_number; i++)
+			buf_head = 0;
+			for (int i = 0; i < list_size; i++)
 			{
-				Kf = CMAC_AES_128(k3, sizeof(k3), sha256(file_set[i].id));
-				temp_Ad_index = Td[F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0)].addr_d_D_first;
-				while (temp_Ad_index != -1)
+				//cout << list_ptr[i];
+				if (list_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					H2 = HMAC_SHA_256((byte*)Kf.c_str(), Kf.size(), to_string(Ad[temp_Ad_index].r_p));
-					temp_ptr = (char*)&Ad[temp_Ad_index];
-					temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
-					for (int j = 0; j < 28; j++)
+					buf.assign(list_ptr + buf_head, i - buf_head);
+					//cout << buf << endl;
+					buf_size = buf.size();
+
+					for (int j = 0; j < buf_size; j++)
 					{
-						temp_ptr[j] = temp_ptr[j] ^ H2.c_str()[j];
+						if (buf[j] == ':') // read file ID from forward index
+						{
+							id_end = j;
+							file_ID.assign(buf.c_str(), id_end);
+							//cout << file_ID << endl; // show the file ID
+							file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+							Kf = CMAC_AES_128(k3, sizeof(k3), file_ID);
+							
+							for (int k = 0; k < Td_counter; k++)
+							{
+								if (file_hash == Td[k].file_hash)
+								{
+									temp_Ad_index = Td[k].addr_d_D_first;
+									break;
+								}
+							}
+
+							while (temp_Ad_index != -1)
+							{
+								H2 = HMAC_SHA_256((byte*)Kf.c_str(), Kf.size(), to_string(Ad[temp_Ad_index].r_p));
+								temp_ptr = (char*)&Ad[temp_Ad_index];
+								temp_Ad_index = Ad[temp_Ad_index].addr_d_next;
+								for (int j = 0; j < 28; j++)
+								{
+									temp_ptr[j] = temp_ptr[j] ^ H2.c_str()[j];
+								}
+							}
+							break;
+						}
 					}
+					buf_head = i + 1;
 				}
 			}
 			/* Encryption Ad */
 
+
 			/* Encryption  Ts */
+			cout << "Encryption  Ts..." << endl;
 			string G_k2_w;
-			for (int i = 0; i < keyeord_number; i++) // for each keyword
+			buf_head = 0;
+			int temp_Ts_index;
+			for (int i = 0; i < index_size; i++)
 			{
-				G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword_set[i].keyword);
-				temp_ptr = (char*)&Ts[F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0)];
-				for (int j = 0; j < sizeof(struct search_table); j++)
+				//cout << buf[i];
+				if (index_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					temp_ptr[j] = temp_ptr[j] ^ G_k2_w.c_str()[j];
+					buf.assign(index_ptr + buf_head, i - buf_head);
+					//cout << buffer << endl;
+					buf_size = buf.size();
+					for (int j = 0; j < buf_size; j++)
+					{
+						if (buf[j] == ':') // read keyword from invert index
+						{
+							w_end = j;
+							keyword.assign(buf.c_str(), w_end);
+							//cout << keyword << endl; // show the keyword
+							keyword_hash = F(k1, sizeof(k1), keyword, 4, 0);
+							for (int k = 0; k < Ts_counter; k++)
+							{
+								if (keyword_hash == Ts[k].keyword_hash)
+								{
+									temp_Ts_index = k;
+									//cout << "temp_Ts_index = " << temp_Ts_index << endl;
+									break;
+								}
+							}
+
+							G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword);
+							temp_ptr = (char*)&Ts[temp_Ts_index];
+							for (int j = 0; j < 8; j++)
+							{
+								temp_ptr[j] = temp_ptr[j] ^ G_k2_w.c_str()[j];
+							}
+							break;
+						}
+					}
+					buf_head = i + 1;
 				}
 			}
 			/* Encryption  Ts */
 
 			/* Encryption Td */
+			cout << "Encryption Td..." << endl;
 			string G_k2_f;
-			for (int i = 0; i < file_number; i++) // for each keyword
+			buf_head = 0;
+			for (int i = 0; i < list_size; i++)
 			{
-				G_k2_f = CMAC_AES_128(k2, sizeof(k2), sha256(file_set[i].id));
-				temp_ptr = (char*)&Td[F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0)];
-				for (int j = 0; j < sizeof(struct del_table); j++)
+				//cout << list_ptr[i];
+				if (list_ptr[i] == '\n')// buf裡的內容相當於getline得到的內容
 				{
-					temp_ptr[j] = temp_ptr[j] ^ G_k2_f.c_str()[j];
+					buf.assign(list_ptr + buf_head, i - buf_head);
+					//cout << buf << endl;
+					buf_size = buf.size();
+
+					for (int j = 0; j < buf_size; j++)
+					{
+						if (buf[j] == ':') // read file ID from forward index
+						{
+							id_end = j;
+							file_ID.assign(buf.c_str(), id_end);
+							//cout << file_ID << endl; // show the file ID
+							file_hash = F(k1, sizeof(k1), file_ID, 4, 0);
+
+							for (int k = 0; k < Td_counter; k++)
+							{
+								if (file_hash == Td[k].file_hash)
+								{
+									temp_Td_index = k;
+									//cout << "temp_Td_index = " << temp_Td_index << endl;
+									break;
+								}
+							}
+							G_k2_f = CMAC_AES_128(k2, sizeof(k2), file_ID);
+							temp_ptr = (char*)&Td[temp_Td_index];
+							for (int j = 0; j < 4; j++)
+							{
+								temp_ptr[j] = temp_ptr[j] ^ G_k2_f.c_str()[j];
+							}
+							break;
+						}
+					}
+					buf_head = i + 1;
 				}
 			}
 			/* Encryption Td */
 
-			delete[] As_index;
-			delete[] Ad_index;
-
-			fstream enc_dest;
-			string path;
-			/* Write Ts to server */
-			for (int i = 0; i < keyeord_number; i++)
+			fstream enc_dest_1, enc_dest_2;
+			string path_1, path_2;
+			/* Write Ts, Td to server */
+			for (int i = 0; i < Ts_counter; i++) // + 1 for "FREE"
 			{
-				keyword_hash = F(k1, sizeof(k1), keyword_set[i].keyword, 2, 0);
-				path = "./EncData/Ts_" + to_string(keyword_hash) + ".enc";
-				cout << "Create file: " << path << endl;
-				enc_dest.open(path, ios::out | ios::binary);
-				if (!enc_dest)
+				path_1 = "./Server/Ts/Ts_" + to_string(Ts[i].keyword_hash) + ".enc";
+				//cout << "Create file: " << path_1 << endl;
+				enc_dest_1.open(path_1, ios::out | ios::binary);
+				if (!enc_dest_1)
 					cerr << "Destination file create failed." << endl << endl;
-				enc_dest.write((char*)&Ts[keyword_hash], sizeof(Ts[keyword_hash]));
-				enc_dest.close();
-			}
+				enc_dest_1.write((char*)&Ts[i], 8);
+				enc_dest_1.close();
 
-			// for free As index, Ts
-			keyword_hash = F(k1, sizeof(k1), FREE, 2, 0);
-			path = "./EncData/Ts_Free";
-			cout << "Create file: " << path << endl;
-			enc_dest.open(path, ios::out | ios::binary);
-			if (!enc_dest)
+				path_2 = "./Server/Td/Td_" + to_string(Td[i].file_hash) + ".enc";
+				//cout << "Create file: " << path_2 << endl;
+				enc_dest_2.open(path_2, ios::out | ios::binary);
+				if (!enc_dest_2)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest_2.write((char*)&Td[i], 4);
+				enc_dest_2.close();
+			}
+			/* Write Ts, Td to server */
+
+			/* Write Ts["FREE"] */
+			path_1 = "./Server/Ts/Ts_" + to_string(Ts[Ts_counter].keyword_hash) + ".enc";
+			//cout << "Create file: " << path_1 << endl;
+			enc_dest_1.open(path_1, ios::out | ios::binary);
+			if (!enc_dest_1)
 				cerr << "Destination file create failed." << endl << endl;
-			enc_dest.write((char*)&Ts[keyword_hash], sizeof(Ts[keyword_hash]));
-			enc_dest.close();
-			cout << endl;
-			/* Write Ts to server */
+			enc_dest_1.write((char*)&Ts[Ts_counter], 8);
+			enc_dest_1.close();
+			/* Write Ts["FREE"] */
 
-			/* Write Td to server */
-			for (int i = 0; i < file_number; i++)
+			/* Write As, Ad to server */
+			for (int i = 0; i < As_counter; i++)
 			{
-				file_hash = F(k1, sizeof(k1), sha256(file_set[i].id), 2, 0);
-				path = "./EncData/Td_" + to_string(file_hash) + ".enc";
-				cout << "Create file: " << path << endl;
-				enc_dest.open(path, ios::out | ios::binary);
-				if (!enc_dest)
+				path_1 = "./Server/As/As_" + to_string(i) + ".enc";
+				//cout << "Create file: " << path_1 << endl;
+				enc_dest_1.open(path_1, ios::out | ios::binary);
+				if (!enc_dest_1)
 					cerr << "Destination file create failed." << endl << endl;
-				enc_dest.write((char*)&Td[file_hash], sizeof(Td[file_hash]));
-				enc_dest.close();
-			}
-			cout << endl;
-			/* Write Td to server */
+				enc_dest_1.write((char*)&As[i], sizeof(As[i]));
+				enc_dest_1.close();
 
-			/* Write As to server */
-			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
-			{
-				path = "./EncData/As_" + to_string(i) + ".enc";
-				cout << "Create file: " << path << endl;
-				enc_dest.open(path, ios::out | ios::binary);
-				if (!enc_dest)
+				path_2 = "./Server/Ad/Ad_" + to_string(i) + ".enc";
+				//cout << "Create file: " << path_2 << endl;
+				enc_dest_2.open(path_2, ios::out | ios::binary);
+				if (!enc_dest_2)
 					cerr << "Destination file create failed." << endl << endl;
-				enc_dest.write((char*)&As[i], sizeof(As[i]));
-				enc_dest.close();
+				enc_dest_2.write((char*)&Ad[i], sizeof(Ad[i]));
+				enc_dest_2.close();
 			}
-			/* Write As to server */
+			/* Write As, Ad to server */
 
-			/* Write Ad to server */
-			for (int i = 0; i < ARRAY_SIZE + FREE_SIZE; i++)
+			/* Write Free As, Ad */
+			for (int i = As_counter; i < As_size; i++)
 			{
-				path = "./EncData/Ad_" + to_string(i) + ".enc";
-				cout << "Create file: " << path << endl;
-				enc_dest.open(path, ios::out | ios::binary);
-				if (!enc_dest)
+				path_1 = "./Server/As/As_" + to_string(i) + ".enc";
+				//cout << "Create file: " << path_1 << endl;
+				enc_dest_1.open(path_1, ios::out | ios::binary);
+				if (!enc_dest_1)
 					cerr << "Destination file create failed." << endl << endl;
-				enc_dest.write((char*)&Ad[i], sizeof(Ad[i]));
-				enc_dest.close();
+				enc_dest_1.write((char*)&As[i], sizeof(As[i]));
+				enc_dest_1.close();
+
+				path_2 = "./Server/Ad/Ad_" + to_string(i) + ".enc";
+				//cout << "Create file: " << path_2 << endl;
+				enc_dest_2.open(path_2, ios::out | ios::binary);
+				if (!enc_dest_2)
+					cerr << "Destination file create failed." << endl << endl;
+				enc_dest_2.write((char*)&Ad[i], sizeof(Ad[i]));
+				enc_dest_2.close();
 			}
-			/* Write Ad to server */
+			/* Write Free As, Ad */
+
+			delete[] As;
+			delete[] Ad;
+			delete[] Ts;
+			delete[] Td;
+
+			UnmapViewOfFile(index_mapH);
+			CloseHandle(index_mapFileH);
+			CloseHandle(index_fileH);
+
+			UnmapViewOfFile(list_mapH);
+			CloseHandle(list_mapFileH);
+			CloseHandle(list_fileH);
 		}
 
-		void client_srch_token(string keyword, int *F_k1_w, string *G_k2_w, string *P_k3_w)
+		void client_srch_token(string keyword, unsigned int *F_k1_w, string *G_k2_w, string *P_k3_w)
 		{
-			*F_k1_w = F(k1, sizeof(k1), keyword, 2, 0);
+			*F_k1_w = F(k1, sizeof(k1), keyword, 4, 0);
 			*G_k2_w = CMAC_AES_128(k2, sizeof(k2), keyword);
 			*P_k3_w = CMAC_AES_128(k3, sizeof(k3), keyword);
 		}
 
-		void server_search(int F_k1_w, string G_k2_w, string P_k3_w)
+		void server_search(unsigned int F_k1_w, string G_k2_w, string P_k3_w)
 		{
 			struct search_table temp_Ts;
 			struct search_array temp_As;
 			char *temp_ptr;
 			string H1;
-			string sha256_id, id_encoded;
+
+			cout << "Search Token: " << endl;
+			cout << "	F_k1_w:" << F_k1_w << ", G_k2_w: " << hex_encoder(G_k2_w) << ", P_k3_w: " << hex_encoder(P_k3_w) << endl;
+			log_file << "Search Token: " << endl;
+			log_file << "	F_k1_w:" << F_k1_w << ", G_k2_w: " << hex_encoder(G_k2_w) << ", P_k3_w: " << hex_encoder(P_k3_w) << endl;
+			
 
 			fstream enc_src;
-			string path = "./EncData/Ts_" + to_string(F_k1_w) + ".enc";
-			cout << "Open file: " << path << endl;
+			string path = "./Server/Ts/Ts_" + to_string(F_k1_w) + ".enc";
+			//cout << "Open file: " << path << endl;
 			enc_src.open(path, ios::in | ios::binary);
 			if (!enc_src)
-				cerr << "No such file." << endl << endl;
+			{
+				cerr << "No such file: " << path << endl << endl;
+				log_file << "No such file." << path << endl << endl;
+			}
 			else
 			{
-				enc_src.read((char*)&temp_Ts, sizeof(temp_Ts));
+				enc_src.read((char*)&temp_Ts, 8);
 				enc_src.close();
 				temp_ptr =(char*)&temp_Ts;
 				
-				for (int i = 0; i < sizeof(temp_Ts); i++)
+				for (int i = 0; i < 8; i++)
 				{
 					temp_ptr[i] = temp_ptr[i] ^ G_k2_w.c_str()[i]; // decryption Ts
 				}
 				
-				path = "./EncData/As_" + to_string(temp_Ts.addr_s_N_first) + ".enc";
-				cout << "Open file: " << path << endl;
+				path = "./Server/As/As_" + to_string(temp_Ts.addr_s_N_first) + ".enc";
+				//cout << "Open file: " << path << endl;
 				enc_src.open(path, ios::in | ios::binary);
 				if (!enc_src)
-					cerr << "No such file." << endl << endl;
+				{
+					cerr << "No such file: " << path << endl << endl;
+					log_file << "No such file: " << path << endl << endl;
+				}
 				else
 				{
 					enc_src.read((char*)&temp_As, sizeof(temp_As));
 					enc_src.close();
 					temp_ptr = (char*)&temp_As;
 					H1 = HMAC_SHA_256((byte*)P_k3_w.c_str(), P_k3_w.size(), to_string(temp_As.r)); // calculate a 256-bit key
-					H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
-					for (int i = 0; i < 36; i++)
+					for (int i = 0; i < 8; i++)
 					{
 						temp_ptr[i] = temp_ptr[i] ^ H1.c_str()[i];
 					}
-					sha256_id.assign(temp_As.id, 32);
-					id_encoded = hex_encoder(sha256_id);// to show the hex data in the command line
-					cout << "Return file ID: " << id_encoded << endl;
+					//cout << "Return file ID: " << temp_As.file_id << endl;
+					log_file << "Return file ID: " << temp_As.file_id << endl;
 					while (temp_As.addr_s_next != -1)
 					{
-						path = "./EncData/As_" + to_string(temp_As.addr_s_next) + ".enc";
-						cout << "Open file: " << path << endl;
+						path = "./Server/As/As_" + to_string(temp_As.addr_s_next) + ".enc";
+						//cout << "Open file: " << path << endl;
 						enc_src.open(path, ios::in | ios::binary);
 						if (!enc_src)
 						{
-							cerr << "No such file." << endl << endl;
+							cerr << "No such file: " << path << endl << endl;
+							log_file << "No such file: " << path << endl << endl;
 							break;
 						}
 						else
@@ -915,18 +1230,17 @@ class DSSE
 							enc_src.close();
 							temp_ptr = (char*)&temp_As;
 							H1 = HMAC_SHA_256((byte*)P_k3_w.c_str(), P_k3_w.size(), to_string(temp_As.r)); // calculate a 256-bit key
-							H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
-							for (int i = 0; i < 36; i++)
+							for (int i = 0; i < 8; i++)
 							{
 								temp_ptr[i] = temp_ptr[i] ^ H1.c_str()[i];
 							}
-							sha256_id.assign(temp_As.id, 32);
-							id_encoded = hex_encoder(sha256_id);// to show the hex data in the command line
-							cout << "Return file ID: " << id_encoded << endl;
+							//cout << "Return file ID: " << temp_As.file_id << endl;
+							log_file << "Return file ID: " << temp_As.file_id << endl;
 						}
 					}
 				}
 			}
+			log_file << endl;
 		}
 
 		string client_add_token(string file_name) // return the numbers of keyword are included in a new file
@@ -983,7 +1297,7 @@ class DSSE
 				H1 = H1.append(H1.c_str(), 4); // to increase key length to 36 bytes
 				H2 = HMAC_SHA_256((byte*)P_k3_f.c_str(), P_k3_f.size(), to_string(Ad.r_p));
 
-				string_to_byte((byte*)As.id, file_name_hash, 32); // store ID to As
+				//string_to_byte((byte*)As.id, file_name_hash, 32); // store ID to As
 				As.addr_s_next = 0;
 
 				Ad.keyword_hash = F_k1_w;
@@ -1031,7 +1345,6 @@ class DSSE
 			struct del_table Td;
 			//int new_N_first, new_N_first_dual;
 			int As_free_i, Ad_free_i, As_free_i_next, Ad_free_i_next, As_w, Ad_w;
-
 
 			token_file.open(path, ios::in | ios::binary);
 			if (!token_file)
@@ -1324,7 +1637,7 @@ class DSSE
 							else
 							{
 								cout << "Open As file: " << As_path << endl;
-								memset(As.id, -1, 32);
+								//memset(As.id, -1, 32);
 								As.addr_s_next = Ts.addr_s_N_first; // point to next free As (the last free As originially)
 								As.r = Td.addr_d_D_first; // for free As, it point to the dual free Ad
 								As_file.write((char*)&As, sizeof(As));
@@ -1490,22 +1803,22 @@ class DSSE
 		}
 			
 	private:
-		byte k1[16], k2[16], k3[16], k4[16];
-		
-		struct index_keyword *keyword_set;
-		struct index_file file_set[3];
+		byte k1[KEY_LENGTH], k2[KEY_LENGTH], k3[KEY_LENGTH], k4[KEY_LENGTH];
 
-		struct search_array As[ARRAY_SIZE + FREE_SIZE];
-		struct del_array Ad[ARRAY_SIZE + FREE_SIZE];
-		struct search_table Ts[SEARCH_TABLE_SIZE];
-		struct del_table Td[DELETE_TABLE_SIZE];
+		fstream log_file;
+		string log_path = "./DSSE_Search_Result.txt";
+
+		//struct search_array As[ARRAY_SIZE + FREE_SIZE];
+		//struct del_array Ad[ARRAY_SIZE + FREE_SIZE];
+		//struct search_table Ts[SEARCH_TABLE_SIZE];
+		//struct del_table Td[DELETE_TABLE_SIZE];
 };
 
 int main()
 {
 	DSSE DSSE_obj;
 
-	int F_k1_w; // search token
+	unsigned int F_k1_w; // search token
 	string G_k2_w, P_k3_w; //search token
 	string keyword, file_name;
 	string add_token; // add token file path
@@ -1513,40 +1826,56 @@ int main()
 	int F_k1_f; // selete tokwn
 	string G_k2_f, P_k3_f; //delete token
 	string sha256_id;
+
+	fstream log_file;
+	log_file.open("./DSSE_Kamara_Log.txt", ios::out);
 	
 	int opcode;
+	int pair_number;
+	cout << "Enter the number of file-keyword pairs for the database:" << endl << ">>";
+	cin >> pair_number;
+
+	DSSE_obj.client_keygen();
+	cout << "Key generateion complete." << endl;
 
 	cout << endl << "Enter OP code:" << endl;
 	cout << "	For client:" << endl;
 	cout << "		0: Generate key" << endl;
-	cout << "		1: Build keyword index" << endl;
-	cout << "		2: Build search encrypted index" << endl;
-	cout << "		3: Generate search token" << endl;
-	cout << "		4: Generate add token" << endl;
-	cout << "		5: Generate delete token" << endl;
+	cout << "		1: Road fordward and invert index" << endl;
+	cout << "		2: Build search encrypted index and upload to server" << endl;
+	cout << "		3: Generate search token and sent to server" << endl;
+	cout << "		4: Generate add token and sent to server" << endl;
+	cout << "		5: Generate delete token and sent to server" << endl;
 	cout << "	For server:" << endl;
-	cout << "		6: Keyword search" << endl;
-	cout << "		7: Add a file" << endl;
-	cout << "		8: Delete a file" << endl;
+	cout << "		6: Receive search token and search" << endl;
+	cout << "		7: Receive add token and add a file" << endl;
+	cout << "		8: Receive a delete token and delete a file" << endl;
 	cout << "	Ctrl + Z: Exit" << endl;
 	cout << ">>";
+
+	LARGE_INTEGER startTime, endTime, fre;
+	double times;
+
 	while (cin >> opcode)
 	{
+		QueryPerformanceFrequency(&fre); // 取得CPU頻率
+		QueryPerformanceCounter(&startTime); // 取得開機到現在經過幾個CPU Cycle
+		/* Program to Timing */
 		switch (opcode)
 		{
 		case 0:
-			DSSE_obj.client_keygen();
-			cout << "Key generateion complete." << endl;
+
 			break;
 
 		case 1:
-			DSSE_obj.client_index_build();
-			cout << "Keyword building complete." << endl;
+
+			cout << "Index loading complete." << endl;
 			break;
 
 		case 2:
-			DSSE_obj.client_enc();
-			cout << "Search encrypted index building compllete." << endl;
+			DSSE_obj.client_enc(pair_number);
+			cout << "Searchable encrypted index building compllete." << endl;
+			log_file << "Client: searchable encryption index building and upload to server" << endl;
 			break;
 
 		case 3:
@@ -1554,6 +1883,7 @@ int main()
 			cin >> keyword;
 			DSSE_obj.client_srch_token(keyword, &F_k1_w, &G_k2_w, &P_k3_w);
 			cout << "Generate a search token for keyword: " << keyword << endl;
+			log_file << "Client: search token generation" << endl;
 			break;
 
 		case 4:
@@ -1573,6 +1903,7 @@ int main()
 
 		case 6:
 			DSSE_obj.server_search(F_k1_w, G_k2_w, P_k3_w);
+			log_file << "Server: search opreation" << endl;
 			break;
 
 		case 7:
@@ -1586,22 +1917,29 @@ int main()
 		default:
 			cout << "Opcode is incorrect..." << endl;
 		}
+		/* Program to Timing */
+		QueryPerformanceCounter(&endTime); // 取得開機到程式執行完成經過幾個CPU Cycle
+		times = ((double)endTime.QuadPart - (double)startTime.QuadPart) / fre.QuadPart;
+		cout << fixed << setprecision(3) << "Processing time: " << times << 's' << endl << endl;
+		log_file << fixed << setprecision(3) << "Processing time: " << times << 's' << endl << endl;
 
 		cout << endl << "Enter OP code:" << endl;
 		cout << "	For client:" << endl;
 		cout << "		0: Generate key" << endl;
-		cout << "		1: Build keyword index" << endl;
-		cout << "		2: Build search encrypted index" << endl;
-		cout << "		3: Generate search token" << endl;
-		cout << "		4: Generate add token" << endl;
-		cout << "		5: Generate delete token" << endl;
+		cout << "		1: Road fordward and invert index" << endl;
+		cout << "		2: Build search encrypted index and upload to server" << endl;
+		cout << "		3: Generate search token and sent to server" << endl;
+		cout << "		4: Generate add token and sent to server" << endl;
+		cout << "		5: Generate delete token and sent to server" << endl;
 		cout << "	For server:" << endl;
-		cout << "		6: Keyword search" << endl;
-		cout << "		7: Add a file" << endl;
-		cout << "		8: Delete a file" << endl;
+		cout << "		6: Receive search token and search" << endl;
+		cout << "		7: Receive add token and add a file" << endl;
+		cout << "		8: Receive a delete token and delete a file" << endl;
 		cout << "	Ctrl + Z: Exit" << endl;
 		cout << ">>";
 	}
+
+	log_file.close();
 
 	return 0;
 }
